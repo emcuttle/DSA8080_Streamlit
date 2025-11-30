@@ -30,6 +30,11 @@ ax.set_xlabel("Predicted")
 ax.set_ylabel("Actual")
 st.pyplot(fig)
 
+# prediction_counts = df['prediction_class'].value_counts()
+# label_counts = df['label'].value_counts()
+# print(prediction_counts)
+# print(label_counts)
+
 # Convert WKT polygons to geometry
 df["geometry"] = df["geometry"].apply(wkt.loads)
 
@@ -39,7 +44,7 @@ gdf = gpd.GeoDataFrame(df, geometry="geometry")
 # IMPORTANT: set the CRS of your current coordinates
 # Your numbers look like UTM zone 10N (common for CA wildfire datasets)
 # If different, adjust this to your correct EPSG.
-gdf = gdf.set_crs(epsg=32613)   # UTM Zone 10N (example)
+gdf = gdf.set_crs(epsg=32610)
 
 # Convert to WGS84 lat/lon for web mapping
 gdf = gdf.to_crs(epsg=4326)
