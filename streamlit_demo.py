@@ -44,7 +44,7 @@ gdf = gpd.GeoDataFrame(df, geometry="geometry")
 # IMPORTANT: set the CRS of your current coordinates
 # Your numbers look like UTM zone 10N (common for CA wildfire datasets)
 # If different, adjust this to your correct EPSG.
-gdf = gdf.set_crs(epsg=32610)
+gdf = gdf.set_crs(epsg=32613)
 
 # Convert to WGS84 lat/lon for web mapping
 gdf = gdf.to_crs(epsg=4326)
