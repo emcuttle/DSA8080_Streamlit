@@ -58,6 +58,19 @@ view_state = pdk.ViewState(
 )
 
 # -----------------------------
+# Add legend
+# -----------------------------
+st.markdown("### Legend")
+st.markdown("""
+<div style="display: flex; gap: 20px; align-items: center;">
+  <div style="width: 20px; height: 20px; background-color: rgb(0,50,120);"></div>
+  <span>Undamaged (prediction_class = 0)</span>
+  <div style="width: 20px; height: 20px; background-color: rgb(255,50,120);"></div>
+  <span>Damaged (prediction_class = 1)</span>
+</div>
+""", unsafe_allow_html=True)
+
+# -----------------------------
 # Render Streamlit map
 # -----------------------------
 st.pydeck_chart(
