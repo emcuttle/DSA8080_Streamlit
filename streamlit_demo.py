@@ -3,6 +3,9 @@ import pandas as pd
 import geopandas as gpd
 from shapely import wkt
 import pydeck as pdk
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 # -----------------------------
 # Load your CSV
@@ -10,6 +13,22 @@ import pydeck as pdk
 st.title("Marhsall Wildfire Building Damage Map")
 
 df = pd.read_csv("marshall_fire_inference.csv")
+
+
+# -----------------------------
+# Display Confusion Matrix
+# -----------------------------
+st.subheader("Model Performance: Confusion Matrix")
+
+# Compute confusion matrix
+cm = confusion_matrix(df['label'], df['prediction_class'])
+
+# Plot using seaborn
+fig, ax = plt.subplots()
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=["Undamaged","Damaged"], yticklabels=["Undamaged","Damaged"], ax=ax)
+ax.set_xlabel("Predicted")
+ax.set_ylabel("Actual")
+st.pyplot(fig)
 
 # Convert WKT polygons to geometry
 df["geometry"] = df["geometry"].apply(wkt.loads)
