@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 
 # Dashboard title
-st.title("Marhsall Wildfire Building Damage Map")
+st.title("Wildfire Response: Building Damage Status")
 
 # Dashboard tabs
 tab1, tab2, tab3 = st.tabs(["Marshall Fire", "Palisades Fire", "Lahaina Fire"])
@@ -64,59 +64,6 @@ with tab1:
         return [[list(coord) for coord in geom.exterior.coords]]
 
     gdf["coords"] = gdf.geometry.apply(polygon_to_coordinates)
-
-    # -----------------------------
-    # Build PyDeck polygon layer
-    # -----------------------------
-    # polygon_layer = pdk.Layer(
-    #     "PolygonLayer",
-    #     gdf,
-    #     get_polygon="coords",
-    #     get_fill_color="[255 * prediction_class, 50, 120]",
-    #     get_line_color=[0, 0, 0],
-    #     line_width_min_pixels=1,
-    #     pickable=True,
-    #     auto_highlight=True,
-    # )
-    #
-    # # Center map on your data
-    # mid_lat = gdf.geometry.centroid.y.mean()
-    # mid_lon = gdf.geometry.centroid.x.mean()
-    #
-    # view_state = pdk.ViewState(
-    #     latitude=mid_lat,
-    #     longitude=mid_lon,
-    #     zoom=14,
-    #     pitch=45,
-    # )
-    #
-    # # -----------------------------
-    # # Add legend
-    # # -----------------------------
-    # # st.markdown("### Legend")
-    # st.markdown("""
-    # <div style="display: flex; gap: 20px; align-items: center;">
-    #   <div style="width: 20px; height: 20px; background-color: rgb(0,50,120);"></div>
-    #   <span>Undamaged (prediction_class = 0)</span>
-    #   <div style="width: 20px; height: 20px; background-color: rgb(255,50,120);"></div>
-    #   <span>Damaged (prediction_class = 1)</span>
-    # </div>
-    # """, unsafe_allow_html=True)
-    #
-    # # -----------------------------
-    # # Render Streamlit map
-    # # -----------------------------
-    # st.pydeck_chart(
-    #     pdk.Deck(
-    #         layers=[polygon_layer],
-    #         initial_view_state=view_state,
-    #         tooltip={
-    #             "html": "<b>ID:</b> {id}<br>"
-    #                     "<b>Label:</b> {label}<br>"
-    #                     "<b>Prediction:</b> {prediction_class}"
-    #         }
-    #     )
-    # )
 
     # -----------------------------
     # Build PyDeck polygon layer
