@@ -3,13 +3,15 @@ import pandas as pd
 import geopandas as gpd
 from shapely import wkt
 import pydeck as pdk
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import seaborn as sns
 import matplotlib.pyplot as plt
 
 # -----------------------------
-# Load your CSV
+# Load data
 # -----------------------------
+
+# Dashboard title
 st.title("Marhsall Wildfire Building Damage Map")
 
 df = pd.read_csv("marshall_fire_inference.csv")
@@ -20,20 +22,24 @@ df = pd.read_csv("marshall_fire_inference.csv")
 # -----------------------------
 st.subheader("Model Performance: Confusion Matrix")
 
-# Compute confusion matrix
-cm = confusion_matrix(df['label'], df['prediction_class'])
+# # Compute confusion matrix
+# cm = confusion_matrix(df['label'], df['prediction_class'])
+#
+# # Plot using seaborn
+# fig, ax = plt.subplots()
+# sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=["Undamaged","Damaged"], yticklabels=["Undamaged","Damaged"], ax=ax)
+# ax.set_xlabel("Predicted")
+# ax.set_ylabel("Actual")
+# st.pyplot(fig)
 
-# Plot using seaborn
+pred_counts = df['prediction_class'].value_counts().sort_index()
+
 fig, ax = plt.subplots()
-sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=["Undamaged","Damaged"], yticklabels=["Undamaged","Damaged"], ax=ax)
-ax.set_xlabel("Predicted")
-ax.set_ylabel("Actual")
+sns.barplot(x=pred_counts.index, y=pred_counts.values, ax=ax)
+ax.set_xticklabels(["Undamaged", "Damaged"])
+ax.set_ylabel("Count")
+ax.set_title("Predicted Class Distribution")
 st.pyplot(fig)
-
-# prediction_counts = df['prediction_class'].value_counts()
-# label_counts = df['label'].value_counts()
-# print(prediction_counts)
-# print(label_counts)
 
 # Convert WKT polygons to geometry
 df["geometry"] = df["geometry"].apply(wkt.loads)
@@ -41,9 +47,7 @@ df["geometry"] = df["geometry"].apply(wkt.loads)
 # Convert to GeoDataFrame
 gdf = gpd.GeoDataFrame(df, geometry="geometry")
 
-# IMPORTANT: set the CRS of your current coordinates
-# Your numbers look like UTM zone 10N (common for CA wildfire datasets)
-# If different, adjust this to your correct EPSG.
+# Set the CRS
 gdf = gdf.set_crs(epsg=32613)
 
 # Convert to WGS84 lat/lon for web mapping
