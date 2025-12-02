@@ -7,66 +7,64 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-# -----------------------------
-# Load data
-# -----------------------------
 
 # Dashboard title
 st.title("Marhsall Wildfire Building Damage Map")
-
-df = pd.read_csv("marshall_fire_inference.csv")
 
 # Dashboard tabs
 tab1, tab2, tab3 = st.tabs(["Marshall Fire", "Palisades Fire", "Lahaina Fire"])
 
 
-# -----------------------------
-# Display Confusion Matrix
-# -----------------------------
-# st.subheader("Model Performance: Confusion Matrix")
-
-# # Compute confusion matrix
-# cm = confusion_matrix(df['label'], df['prediction_class'])
-#
-# # Plot using seaborn
-# fig, ax = plt.subplots()
-# sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=["Undamaged","Damaged"], yticklabels=["Undamaged","Damaged"], ax=ax)
-# ax.set_xlabel("Predicted")
-# ax.set_ylabel("Actual")
-# st.pyplot(fig)
-
-# -----------------------------
-# Display bar plot of prediction_class counts
-# -----------------------------
-# pred_counts = df['prediction_class'].value_counts().sort_index()
-#
-# fig, ax = plt.subplots()
-# sns.barplot(x=pred_counts.index, y=pred_counts.values, ax=ax)
-# ax.set_xticklabels(["Undamaged", "Damaged"])
-# ax.set_ylabel("Count")
-# ax.set_title("Predicted Class Distribution")
-# st.pyplot(fig)
-
-# Convert WKT polygons to geometry
-df["geometry"] = df["geometry"].apply(wkt.loads)
-
-# Convert to GeoDataFrame
-gdf = gpd.GeoDataFrame(df, geometry="geometry")
-
-# Set the CRS
-gdf = gdf.set_crs(epsg=32613)
-
-# Convert to WGS84 lat/lon for web mapping
-gdf = gdf.to_crs(epsg=4326)
-
-# Extract polygon coordinate arrays for pydeck
-def polygon_to_coordinates(geom):
-    # pydeck expects [[[lon, lat], ...]] format
-    return [[list(coord) for coord in geom.exterior.coords]]
-
-gdf["coords"] = gdf.geometry.apply(polygon_to_coordinates)
-
+# Tab 1 - Marshall fire
 with tab1:
+    df = pd.read_csv("marshall_fire_inference.csv")
+
+    # -----------------------------
+    # Display Confusion Matrix
+    # -----------------------------
+    # st.subheader("Model Performance: Confusion Matrix")
+
+    # # Compute confusion matrix
+    # cm = confusion_matrix(df['label'], df['prediction_class'])
+    #
+    # # Plot using seaborn
+    # fig, ax = plt.subplots()
+    # sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=["Undamaged","Damaged"], yticklabels=["Undamaged","Damaged"], ax=ax)
+    # ax.set_xlabel("Predicted")
+    # ax.set_ylabel("Actual")
+    # st.pyplot(fig)
+
+    # -----------------------------
+    # Display bar plot of prediction_class counts
+    # -----------------------------
+    # pred_counts = df['prediction_class'].value_counts().sort_index()
+    #
+    # fig, ax = plt.subplots()
+    # sns.barplot(x=pred_counts.index, y=pred_counts.values, ax=ax)
+    # ax.set_xticklabels(["Undamaged", "Damaged"])
+    # ax.set_ylabel("Count")
+    # ax.set_title("Predicted Class Distribution")
+    # st.pyplot(fig)
+
+    # Convert WKT polygons to geometry
+    df["geometry"] = df["geometry"].apply(wkt.loads)
+
+    # Convert to GeoDataFrame
+    gdf = gpd.GeoDataFrame(df, geometry="geometry")
+
+    # Set the CRS
+    gdf = gdf.set_crs(epsg=32613)
+
+    # Convert to WGS84 lat/lon for web mapping
+    gdf = gdf.to_crs(epsg=4326)
+
+    # Extract polygon coordinate arrays for pydeck
+    def polygon_to_coordinates(geom):
+        # pydeck expects [[[lon, lat], ...]] format
+        return [[list(coord) for coord in geom.exterior.coords]]
+
+    gdf["coords"] = gdf.geometry.apply(polygon_to_coordinates)
+
     # -----------------------------
     # Build PyDeck polygon layer
     # -----------------------------
@@ -95,7 +93,7 @@ with tab1:
     # -----------------------------
     # Add legend
     # -----------------------------
-    st.markdown("### Legend")
+    # st.markdown("### Legend")
     st.markdown("""
     <div style="display: flex; gap: 20px; align-items: center;">
       <div style="width: 20px; height: 20px; background-color: rgb(0,50,120);"></div>
