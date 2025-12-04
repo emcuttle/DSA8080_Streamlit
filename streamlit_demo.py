@@ -9,14 +9,14 @@ import matplotlib.pyplot as plt
 
 
 # Dashboard title
-st.title("Wildfire Response: Building Damage Status")
+st.title("Marshall CO Wildfire Response: Building Damage Statuses")
 
 # Dashboard tabs
-tab1, tab2, tab3 = st.tabs(["Marshall Fire", "Palisades Fire", "Lahaina Fire"])
+# tab1, tab2, tab3 = st.tabs(["Marshall Fire", "Palisades Fire", "Lahaina Fire"])
 
 
 # Tab 1 - Marshall fire
-with tab1:
+# with tab1:
     df = pd.read_csv("marshall_fire_inference.csv")
 
     # -----------------------------
