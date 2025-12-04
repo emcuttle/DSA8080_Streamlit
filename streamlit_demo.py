@@ -17,110 +17,110 @@ st.title("Marshall CO Wildfire Response: Building Damage Statuses")
 
 # Tab 1 - Marshall fire
 # with tab1:
-    df = pd.read_csv("marshall_fire_inference.csv")
+df = pd.read_csv("marshall_fire_inference.csv")
 
-    # -----------------------------
-    # Display Confusion Matrix
-    # -----------------------------
-    # st.subheader("Model Performance: Confusion Matrix")
+# -----------------------------
+# Display Confusion Matrix
+# -----------------------------
+# st.subheader("Model Performance: Confusion Matrix")
 
-    # # Compute confusion matrix
-    # cm = confusion_matrix(df['label'], df['prediction_class'])
-    #
-    # # Plot using seaborn
-    # fig, ax = plt.subplots()
-    # sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=["Undamaged","Damaged"], yticklabels=["Undamaged","Damaged"], ax=ax)
-    # ax.set_xlabel("Predicted")
-    # ax.set_ylabel("Actual")
-    # st.pyplot(fig)
+# # Compute confusion matrix
+# cm = confusion_matrix(df['label'], df['prediction_class'])
+#
+# # Plot using seaborn
+# fig, ax = plt.subplots()
+# sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=["Undamaged","Damaged"], yticklabels=["Undamaged","Damaged"], ax=ax)
+# ax.set_xlabel("Predicted")
+# ax.set_ylabel("Actual")
+# st.pyplot(fig)
 
-    # -----------------------------
-    # Display bar plot of prediction_class counts
-    # -----------------------------
-    # pred_counts = df['prediction_class'].value_counts().sort_index()
-    #
-    # fig, ax = plt.subplots()
-    # sns.barplot(x=pred_counts.index, y=pred_counts.values, ax=ax)
-    # ax.set_xticklabels(["Undamaged", "Damaged"])
-    # ax.set_ylabel("Count")
-    # ax.set_title("Predicted Class Distribution")
-    # st.pyplot(fig)
+# -----------------------------
+# Display bar plot of prediction_class counts
+# -----------------------------
+# pred_counts = df['prediction_class'].value_counts().sort_index()
+#
+# fig, ax = plt.subplots()
+# sns.barplot(x=pred_counts.index, y=pred_counts.values, ax=ax)
+# ax.set_xticklabels(["Undamaged", "Damaged"])
+# ax.set_ylabel("Count")
+# ax.set_title("Predicted Class Distribution")
+# st.pyplot(fig)
 
-    # Convert WKT polygons to geometry
-    df["geometry"] = df["geometry"].apply(wkt.loads)
+# Convert WKT polygons to geometry
+df["geometry"] = df["geometry"].apply(wkt.loads)
 
-    # Convert to GeoDataFrame
-    gdf = gpd.GeoDataFrame(df, geometry="geometry")
+# Convert to GeoDataFrame
+gdf = gpd.GeoDataFrame(df, geometry="geometry")
 
-    # Set the CRS
-    gdf = gdf.set_crs(epsg=32613)
+# Set the CRS
+gdf = gdf.set_crs(epsg=32613)
 
-    # Convert to WGS84 lat/lon for web mapping
-    gdf = gdf.to_crs(epsg=4326)
+# Convert to WGS84 lat/lon for web mapping
+gdf = gdf.to_crs(epsg=4326)
 
-    # Extract polygon coordinate arrays for pydeck
-    def polygon_to_coordinates(geom):
-        # pydeck expects [[[lon, lat], ...]] format
-        return [[list(coord) for coord in geom.exterior.coords]]
+# Extract polygon coordinate arrays for pydeck
+def polygon_to_coordinates(geom):
+    # pydeck expects [[[lon, lat], ...]] format
+    return [[list(coord) for coord in geom.exterior.coords]]
 
-    gdf["coords"] = gdf.geometry.apply(polygon_to_coordinates)
+gdf["coords"] = gdf.geometry.apply(polygon_to_coordinates)
 
-    # -----------------------------
-    # Build PyDeck polygon layer
-    # -----------------------------
-    polygon_layer = pdk.Layer(
-        "PolygonLayer",
-        gdf,
-        get_polygon="coords",
+# -----------------------------
+# Build PyDeck polygon layer
+# -----------------------------
+polygon_layer = pdk.Layer(
+    "PolygonLayer",
+    gdf,
+    get_polygon="coords",
 
-        # Clean, explicit colors:
-        # prediction_class = 0 → bright blue
-        # prediction_class = 1 → magenta/red
-        get_fill_color="prediction_class == 1 ? [255, 50, 120] : [50, 150, 255]",
+    # Clean, explicit colors:
+    # prediction_class = 0 → bright blue
+    # prediction_class = 1 → magenta/red
+    get_fill_color="prediction_class == 1 ? [255, 50, 120] : [50, 150, 255]",
 
-        get_line_color=[0, 0, 0],
-        line_width_min_pixels=1,
-        pickable=True,
-        auto_highlight=True,
+    get_line_color=[0, 0, 0],
+    line_width_min_pixels=1,
+    pickable=True,
+    auto_highlight=True,
+)
+
+# Center view
+mid_lat = gdf.geometry.centroid.y.mean()
+mid_lon = gdf.geometry.centroid.x.mean()
+
+view_state = pdk.ViewState(
+    latitude=mid_lat,
+    longitude=mid_lon,
+    zoom=14,
+    pitch=45,
+)
+
+# -----------------------------
+# Legend
+# -----------------------------
+st.markdown("""
+<div style="display: flex; gap: 20px; align-items: center;">
+
+  <div style="width: 20px; height: 20px; background-color: rgb(50,150,255);"></div>
+  <span>Undamaged (prediction_class = 0)</span>
+
+  <div style="width: 20px; height: 20px; background-color: rgb(255,50,120);"></div>
+  <span>Damaged (prediction_class = 1)</span>
+
+</div>
+""", unsafe_allow_html=True)
+
+# -----------------------------
+# Render Streamlit map
+# -----------------------------
+st.pydeck_chart(
+    pdk.Deck(
+        layers=[polygon_layer],
+        initial_view_state=view_state,
+        tooltip={
+            "html": "<b>ID:</b> {id}<br>"
+                    "<b>Label:</b> {label}<br>"
+                    "<b>Prediction:</b> {prediction_class}"
+        }
     )
-
-    # Center view
-    mid_lat = gdf.geometry.centroid.y.mean()
-    mid_lon = gdf.geometry.centroid.x.mean()
-
-    view_state = pdk.ViewState(
-        latitude=mid_lat,
-        longitude=mid_lon,
-        zoom=14,
-        pitch=45,
-    )
-
-    # -----------------------------
-    # Legend
-    # -----------------------------
-    st.markdown("""
-    <div style="display: flex; gap: 20px; align-items: center;">
-
-      <div style="width: 20px; height: 20px; background-color: rgb(50,150,255);"></div>
-      <span>Undamaged (prediction_class = 0)</span>
-
-      <div style="width: 20px; height: 20px; background-color: rgb(255,50,120);"></div>
-      <span>Damaged (prediction_class = 1)</span>
-
-    </div>
-    """, unsafe_allow_html=True)
-
-    # -----------------------------
-    # Render Streamlit map
-    # -----------------------------
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=[polygon_layer],
-            initial_view_state=view_state,
-            tooltip={
-                "html": "<b>ID:</b> {id}<br>"
-                        "<b>Label:</b> {label}<br>"
-                        "<b>Prediction:</b> {prediction_class}"
-            }
-        )
-    )
+)
