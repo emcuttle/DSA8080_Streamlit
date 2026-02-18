@@ -1,6 +1,7 @@
 streamlit
 pandas
 geopandas
+google-cloud-bigquery
 shapely
 pydeck
 scikit-learn
