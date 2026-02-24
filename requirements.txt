@@ -8,3 +8,7 @@ scikit-learn
 seaborn
 matplotlib
 google-cloud-bigquery[pandas]
+pyproj
+libpysal
+esda
+scipy
