@@ -7,3 +7,4 @@ pydeck
 scikit-learn
 seaborn
 matplotlib
+google-cloud-bigquery[pandas]
