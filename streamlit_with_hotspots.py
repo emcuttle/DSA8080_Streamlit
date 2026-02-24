@@ -70,7 +70,7 @@ def get_bq_data():
 # -----------------------------
 @st.cache_data(show_spinner="Computing Gi* hotspots…")
 def add_gistar_hotspots(
-    buildings_gdf: gpd.GeoDataFrame,
+    _buildings_gdf: gpd.GeoDataFrame,
     damaged_col: str = "prediction_class",
     damaged_value: int = 1,
     method: str = "KNN",
@@ -86,7 +86,7 @@ def add_gistar_hotspots(
       - gi_p (permutation p-value)
       - gi_cat (Hotspot / Coldspot / Not significant)
     """
-    gdf = buildings_gdf.copy()
+    gdf = _buildings_gdf.copy()
 
     # Ensure CRS exists (BigQuery sometimes returns None)
     if gdf.crs is None:
