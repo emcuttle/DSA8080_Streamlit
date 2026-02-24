@@ -68,7 +68,7 @@ def get_bq_data():
 # -----------------------------
 # 1b. Hotspot computation (Gi*)
 # -----------------------------
-@st.cache_data(show_spinner="Computing Gi* hotspots…")
+# @st.cache_data(show_spinner="Computing Gi* hotspots…")
 def add_gistar_hotspots(
     _buildings_gdf: gpd.GeoDataFrame,
     damaged_col: str = "prediction_class",
