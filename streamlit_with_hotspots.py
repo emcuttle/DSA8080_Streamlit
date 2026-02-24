@@ -205,7 +205,13 @@ try:
             "Coldspot (undamaged cluster)": [44, 123, 182], # blue
             "Not significant": [189, 189, 189]            # gray
         }
-        gdf["fill_color"] = gdf["gi_cat"].map(hotspot_colors).fillna([189, 189, 189])
+        gdf["fill_color"] = gdf["gi_cat"].map(hotspot_colors)
+        
+        default_color = [189, 189, 189]
+        gdf["fill_color"] = gdf["fill_color"].apply(
+            lambda x: x if isinstance(x, list) else default_color
+        )
+
 
         tooltip_html = (
             "<b>Building ID:</b> {id}<br>"
