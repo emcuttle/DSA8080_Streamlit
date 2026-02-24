@@ -68,7 +68,7 @@ def get_bq_data():
 # -----------------------------
 # 1b. Hotspot computation (Gi*)
 # -----------------------------
-# @st.cache_data(show_spinner="Computing Gi* hotspots…")
+@st.cache_data(show_spinner="Computing Gi* hotspots…")
 def add_gistar_hotspots(
     _buildings_gdf: gpd.GeoDataFrame,
     damaged_col: str = "prediction_class",
@@ -173,7 +173,7 @@ try:
     # -----------------------------
     if enable_hotspots:
         gdf = add_gistar_hotspots(
-            buildings_gdf=gdf,
+            _buildings_gdf=gdf,
             damaged_col="prediction_class",
             damaged_value=1,
             method=neighbor_method,
