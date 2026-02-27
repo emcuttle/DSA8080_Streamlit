@@ -15,7 +15,7 @@ from libpysal.weights import KNN, DistanceBand
 st.title("Marshall CO Wildfire Response: Building Damage Statuses")
 
 # -----------------------------
-# 0. Sidebar: Hotspot controls
+# Sidebar: Hotspot controls
 # -----------------------------
 st.sidebar.header("Hotspot Detection (Gi*)")
 
@@ -24,15 +24,15 @@ enable_hotspots = st.sidebar.toggle("Enable hotspot detection", value=False)
 neighbor_method = st.sidebar.selectbox(
     "Neighbor method",
     options=["KNN", "DistanceBand"],
-    help="KNN = k nearest neighbors; DistanceBand = neighbors within a distance threshold."
+    help="KNN = K-Nearest Neighbor Algorithm; DistanceBand = Neighbors within a fixed distance."
 )
 
 k = st.sidebar.slider("K (for KNN)", min_value=4, max_value=20, value=10, step=1)
-threshold_m = st.sidebar.slider("Distance threshold (meters)", min_value=50, max_value=600, value=200, step=10)
+threshold_m = st.sidebar.slider("Distance threshold (meters)", min_value=1, max_value=100, value=50, step=5)
 
 alpha = st.sidebar.select_slider(
     "Significance level (alpha)",
-    options=[0.10, 0.05, 0.01],
+    options=[0.01, 0.05, 0.10],
     value=0.05
 )
 
@@ -43,11 +43,11 @@ permutations = st.sidebar.selectbox(
 )
 
 # -----------------------------
-# 1. BigQuery Connection
+# BigQuery Connection
 # -----------------------------
 @st.cache_data
 def get_bq_data():
-    # Access the credentials from secrets
+    # Access the GCP credentials from secrets.toml
     if "gcp_service_account" in st.secrets:
         creds_info = st.secrets["gcp_service_account"]
         client = bigquery.Client.from_service_account_info(creds_info)
@@ -62,11 +62,10 @@ def get_bq_data():
             spatial_geom 
         FROM `capstone-project-485905.marshall_fire_inference.v_marshall_fire_map`
     """
-    # BigQuery returns geography; to_geodataframe uses geo stack
     return client.query(query).to_geodataframe()
 
 # -----------------------------
-# 1b. Hotspot computation (Gi*)
+# GI* Hotspot Code
 # -----------------------------
 @st.cache_data(show_spinner="Computing Gi* hotspots…")
 def add_gistar_hotspots(
@@ -75,22 +74,13 @@ def add_gistar_hotspots(
     damaged_value: int = 1,
     method: str = "KNN",
     k: int = 10,
-    threshold_m: float = 200.0,
+    threshold_m: float = 50.0,
     permutations: int = 999,
     alpha: float = 0.05
 ) -> gpd.GeoDataFrame:
-    """
-    Computes Getis-Ord Gi* (local G) hotspots on building centroids, but returns
-    original polygons with added columns:
-      - gi_z (z-score)
-      - gi_p (permutation p-value)
-      - gi_cat (Hotspot / Coldspot / Not significant)
-    """
     gdf = _buildings_gdf.copy()
 
-    # Ensure CRS exists (BigQuery sometimes returns None)
     if gdf.crs is None:
-        # BigQuery GEOGRAPHY is typically WGS84
         gdf = gdf.set_crs(4326)
 
     # Use projected CRS for distance calculations (meters)
@@ -99,13 +89,13 @@ def add_gistar_hotspots(
     else:
         gdf_proj = gdf
 
-    # Use centroids for neighbor calculations
+    # Use centroids for KNN calculations
     pts = gdf_proj.copy()
     pts["geometry"] = pts.geometry.centroid
 
     # Ensure prediction_class is numeric (0/1)
     y = pd.to_numeric(pts[damaged_col], errors="coerce").fillna(0).astype(int).to_numpy()
-    y = (y == damaged_value).astype(int)  # damaged=1, undamaged=0
+    y = (y == damaged_value).astype(int)  # damaged = 1, undamaged = 0
 
     # Build weights
     if method == "KNN":
@@ -118,7 +108,7 @@ def add_gistar_hotspots(
     # Local Gi* (G_Local)
     g_local = G_Local(y, w, permutations=permutations, star=True)
 
-    # Attach results to ORIGINAL gdf (not projected), aligned by row order
+    # Attach results to original gdf, aligned by row order
     out = gdf.copy()
     out["gi_z"] = g_local.Zs
     out["gi_p"] = g_local.p_sim
@@ -134,9 +124,9 @@ try:
     gdf = get_bq_data()
 
     # -----------------------------
-    # 2. Model Performance
+    # Model Performance
     # -----------------------------
-    with st.expander("📊 View Model Performance Metrics"):
+    with st.expander("View Model Performance Metrics"):
         col1, col2 = st.columns(2)
 
         with col1:
@@ -169,7 +159,7 @@ try:
             st.pyplot(fig2)
 
     # -----------------------------
-    # 3. Apply hotspots (optional)
+    # Apply hotspots
     # -----------------------------
     if enable_hotspots:
         gdf = add_gistar_hotspots(
@@ -183,7 +173,7 @@ try:
             alpha=float(alpha),
         )
 
-        # Hotspot legend + colors
+        # Hotspot legend
         st.markdown(
             """
             <div style="margin-bottom:10px; font-weight:bold;">Hotspot Legend (Gi*)</div>
@@ -226,7 +216,7 @@ try:
 
     else:
         # -----------------------------
-        # 3. Original Legend
+        # Original Legend
         # -----------------------------
         st.markdown(f"""
         <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 10px; font-weight: bold;">
@@ -243,11 +233,10 @@ try:
             "<b>Prediction:</b> {prediction_class}"
         )
 
-        # Keep your original deck.gl expression
         get_fill_color = "prediction_class == '1' || prediction_class == 1 ? [255, 69, 0] : [0, 255, 255]"
 
     # -----------------------------
-    # 4. Build PyDeck Map
+    # Build Map
     # -----------------------------
     polygon_layer = pdk.Layer(
         "GeoJsonLayer",
@@ -259,7 +248,6 @@ try:
         pickable=True,
     )
 
-    # Safe center: compute in WGS84
     gdf_ll = gdf
     if gdf_ll.crs is None:
         gdf_ll = gdf_ll.set_crs(4326)
