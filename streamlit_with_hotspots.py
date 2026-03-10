@@ -28,7 +28,7 @@ neighbor_method = st.sidebar.selectbox(
 )
 
 k = st.sidebar.slider("K (for KNN)", min_value=4, max_value=20, value=10, step=1)
-threshold_m = st.sidebar.slider("Distance threshold (meters)", min_value=1, max_value=100, value=50, step=5)
+threshold_m = st.sidebar.slider("Distance threshold (meters)", min_value=2, max_value=50, value=20, step=2)
 
 alpha = st.sidebar.select_slider(
     "Significance level (alpha)",
