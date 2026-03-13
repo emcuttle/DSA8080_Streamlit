@@ -59,7 +59,7 @@ def get_bq_data():
             id, 
             label, 
             prediction_class, 
-            spatial_geom 
+            geometry 
         FROM `capstone-project-485905.model_inference_results.v_inference_results_geo`
     """
     return client.query(query).to_geodataframe()
