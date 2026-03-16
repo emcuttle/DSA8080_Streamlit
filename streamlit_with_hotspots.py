@@ -59,7 +59,7 @@ def get_bq_data():
             id, 
             label, 
             prediction_class, 
-            geometry 
+            spatial_geom
         FROM `capstone-project-485905.marshall_fire_inference.v_marshall_fire_map`
     """
     return client.query(query).to_geodataframe()
