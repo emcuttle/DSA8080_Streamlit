@@ -45,15 +45,21 @@ permutations = st.sidebar.selectbox(
 # -----------------------------
 # BigQuery Connection
 # -----------------------------
-@st.cache_data
-def get_bq_data():
+# @st.cache_data
+def get_bq_client():
     # Access the GCP credentials from secrets.toml
     if "gcp_service_account" in st.secrets:
         creds_info = st.secrets["gcp_service_account"]
-        client = bigquery.Client.from_service_account_info(creds_info)
-    else:
-        client = bigquery.Client()
+        return bigquery.Client.from_service_account_info(creds_info)
+    return bigquery.Client()
+    #     client = bigquery.Client.from_service_account_info(creds_info)
+    # else:
+    #     client = bigquery.Client()
 
+# pulling view data from BQ
+@st.cache_data
+def get_bq_data():
+    client = get_bq_client()
     query = """
         SELECT 
             id, 
@@ -63,6 +69,35 @@ def get_bq_data():
         FROM `capstone-project-485905.marshall_fire_inference.v_marshall_fire_map`
     """
     return client.query(query).to_geodataframe()
+
+# creating KPI function to calculate total area affected (based on total area of buildings classified as damaged)
+@st.cache_data(ttl=300)
+def get_bq_kpis():
+    client = get_bq_client()
+    kpi_query = """
+        SELECT
+            COUNT(*) AS total_buildings,
+            SUM(CASE WHEN prediction_class = 1 THEN 1 ELSE 0 END) AS predicted_damaged_buildings,
+            SUM(CASE WHEN prediction_class = 1 THEN ST_AREA(spatial_geom) ELSE 0 END) / 1e6 AS predicted_damaged_area_km2,
+            SUM(CASE WHEN prediction_class = 1 THEN ST_AREA(spatial_geom) ELSE 0 END) * 0.000247105 AS predicted_damaged_area_acres
+        FROM `capstone-project-485905.marshall_fire_inference.v_marshall_fire_map`
+    """
+    return client.query(kpi_query).to_dataframe()
+
+# display KPI cards
+kpi_df = get_bq_kpis()
+
+total_buildings = int(kpi_df.loc[0, "total_buildings"] or 0)
+pred_damaged = int(kpi_df.loc[0, "predicted_damaged_buildings"] or 0)
+area_km2 = float(kpi_df.loc[0, "predicted_damaged_area_km2"] or 0.0)
+area_acres = float(kpi_df.loc[0, "predicted_damaged_area_acres"] or 0.0)
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total Buildings", f"{total_buildings:,}")
+c2.metric("Predicted Damaged (count)", f"{pred_damaged:,}")
+c3.metric("Predicted Damaged Area", f"{area_km2:,.2f} km²")
+c4.metric("Predicted Damaged Area", f"{area_acres:,.0f} acres")
+    
 
 # -----------------------------
 # GI* Hotspot Code
