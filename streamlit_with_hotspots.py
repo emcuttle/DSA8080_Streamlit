@@ -12,12 +12,12 @@ from esda import G_Local
 from libpysal.weights import KNN, DistanceBand
 
 # Dashboard title
-st.title("Marshall CO Wildfire Response: Building Damage Statuses")
+st.title("Marshall CO Wildfire: Building Damage Statuses")
 
 # -----------------------------
 # Sidebar: Hotspot controls
 # -----------------------------
-st.sidebar.header("Hotspot Detection (Gi*)")
+st.sidebar.header("Hotspot Detection")
 
 enable_hotspots = st.sidebar.toggle("Enable hotspot detection", value=False)
 
@@ -60,14 +60,14 @@ def get_bq_data():
             label, 
             prediction_class, 
             geometry 
-        FROM `capstone-project-485905.model_inference_results.v_inference_results_geo`
+        FROM `capstone-project-485905.marshall_fire_inference.v_marshall_fire_map`
     """
     return client.query(query).to_geodataframe()
 
 # -----------------------------
 # GI* Hotspot Code
 # -----------------------------
-@st.cache_data(show_spinner="Computing Gi* hotspots…")
+@st.cache_data(show_spinner="Computing hotspots…")
 def add_gistar_hotspots(
     _buildings_gdf: gpd.GeoDataFrame,
     damaged_col: str = "prediction_class",
