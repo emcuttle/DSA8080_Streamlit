@@ -66,7 +66,7 @@ def get_bq_data():
             label, 
             prediction_class, 
             spatial_geom
-        FROM `capstone-project-485905.marshall_fire_inference.v_marshall_fire_map`
+        FROM `capstone-project-485905.marshall_v9_seed_75.v_inference_results_geo`
     """
     return client.query(query).to_geodataframe()
 
@@ -80,7 +80,7 @@ def get_bq_kpis():
             SUM(CASE WHEN prediction_class = 1 THEN 1 ELSE 0 END) AS predicted_damaged_buildings,
             SUM(CASE WHEN prediction_class = 1 THEN ST_AREA(spatial_geom) ELSE 0 END) / 1e6 AS predicted_damaged_area_km2,
             SUM(CASE WHEN prediction_class = 1 THEN ST_AREA(spatial_geom) ELSE 0 END) * 0.000247105 AS predicted_damaged_area_acres
-        FROM `capstone-project-485905.marshall_fire_inference.v_marshall_fire_map`
+        FROM `capstone-project-485905.marshall_v9_seed_75.v_inference_results_geo`
     """
     return client.query(kpi_query).to_dataframe()
 
