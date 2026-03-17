@@ -168,19 +168,10 @@ try:
             damaged_value=1,
         )
 
-        # display hotspot details for transparency
-        params = gdf.attrs.get("gi_params", {})
-        with st.expander("Hotspot Method Details"):
-            st.write(
-                f"Hotspots are computed using Getis-Ord Gi* with KNN neighbors "
-                f"(k={params.get('k')}), FDR-corrected significance (alpha={params.get('alpha')}), "
-                f"permutations={params.get('permutations')}."
-            )
-
         # hotspot legend
         st.markdown(
             """
-            <div style="margin-bottom:10px; font-weight:bold;">Hotspot Legend (Gi*)</div>
+            <div style="margin-bottom:10px; font-weight:bold;">Hotspot Legend</div>
             <div style="display:flex; gap:20px; align-items:center; margin-bottom: 10px;">
               <div style="width:20px; height:20px; background-color:#d7191c; border:1px solid white;"></div>
               <span>Hotspot (damaged cluster)</span>
