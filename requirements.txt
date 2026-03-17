@@ -12,3 +12,4 @@ pyproj
 libpysal
 esda
 scipy
+statsmodel
