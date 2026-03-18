@@ -52,7 +52,7 @@ def get_bq_data():
             label, 
             prediction_class, 
             geometry
-        FROM `capstone-project-485905.model_inference_results.v_inference_results_geo`
+        FROM `capstone-project-485905.marshall_v9_seed_75.v_inference_results_geo`
     """
     return client.query(query).to_geodataframe()
 
