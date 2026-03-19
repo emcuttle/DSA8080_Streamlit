@@ -242,39 +242,61 @@ try:
         get_fill_color = "prediction_class == '1' || prediction_class == 1 ? [255, 69, 0] : [0, 255, 255]"
 
     # -----------------------------
-    # Build Map
-    # -----------------------------
+# Build Map
+# -----------------------------
+# 1. Ensure we have data before mapping
+if not gdf.empty:
+    
+    # 2. Fix the Centroid Warning & centering issue
+    # We briefly project to a meter-based system (UTM) to find the true center,
+    # then convert that single point back to Lat/Lon for Pydeck.
+    try:
+        # estimate_utm_crs() finds the best local meter-based projection automatically
+        projected_gdf = gdf.to_crs(gdf.estimate_utm_crs())
+        center = projected_gdf.geometry.unary_union.centroid
+        
+        # Convert center point back to WGS84 (Degrees)
+        import shapely.ops as ops
+        from functools import partial
+        import pyproj
+
+        transformer = pyproj.Transformer.from_crs(projected_gdf.crs, "EPSG:4326", always_xy=True).transform
+        lon, lat = ops.transform(transformer, center).x, ops.transform(transformer, center).y
+    except:
+        # Fallback if the fancy math fails: just average the current coordinates
+        lat = gdf.geometry.centroid.y.mean()
+        lon = gdf.geometry.centroid.x.mean()
+
+    # 3. Define the Layer
+    # Using __geo_interface__ ensures Pydeck sees the GeoJSON structure perfectly
     polygon_layer = pdk.Layer(
         "GeoJsonLayer",
-        gdf,
+        gdf.__geo_interface__, 
         opacity=0.9,
-        stroked=False,
+        stroked=True,
+        get_line_color=[255, 255, 255],
+        line_width_min_pixels=1,
         filled=True,
         get_fill_color=get_fill_color,
         pickable=True,
     )
 
-    gdf_ll = gdf
-    if gdf_ll.crs is None:
-        gdf_ll = gdf_ll.set_crs(4326)
-    if not gdf_ll.crs.is_geographic:
-        gdf_ll = gdf_ll.to_crs(4326)
-
+    # 4. Set the View State
     view_state = pdk.ViewState(
-        latitude=float(gdf_ll.geometry.centroid.y.mean()),
-        longitude=float(gdf_ll.geometry.centroid.x.mean()),
-        zoom=14,
+        latitude=lat,
+        longitude=lon,
+        zoom=15,
         pitch=45,
     )
 
+    # 5. Render
     st.pydeck_chart(
         pdk.Deck(
             layers=[polygon_layer],
             initial_view_state=view_state,
-            tooltip={"html": tooltip_html}
+            tooltip={"html": tooltip_html},
+            map_style="mapbox://styles/mapbox/satellite-v9" # Satellite view is great for wildfire damage
         )
     )
-
-except Exception as e:
-    st.error(f"Failed to load data from BigQuery: {e}")
-    st.info("Check your GCP credentials, ensure the BigQuery View exists, and verify dependencies in requirements.txt.")
+else:
+    st.warning("No data found to display on the map.")
