@@ -14,13 +14,15 @@ from esda import G_Local
 from libpysal.weights import KNN
 from statsmodels.stats.multitest import multipletests
 from shapely import wkt
-
+import shapely.ops as ops
+from functools import partial
+import pyproj
 
 # -----------------------------
 # Dashboard title
-st.title("Marshall CO Wildfire: Building Damage Statuses")
 # -----------------------------
-
+st.set_page_config(layout="wide")
+st.title("Marshall CO Wildfire: Building Damage Statuses")
 
 # -----------------------------
 # Hotspot Toggle
@@ -33,12 +35,10 @@ with st.sidebar.expander("What are cluster hotspots?"):
         "(Getis-Ord Gi*). This helps identify neighborhoods with concentrated predicted damage."
     )
 
-
 # -----------------------------
 # BigQuery Connection
 # -----------------------------
 def get_bq_client():
-    # access the GCP credentials from secrets.toml
     if "gcp_service_account" in st.secrets:
         creds_info = st.secrets["gcp_service_account"]
         return bigquery.Client.from_service_account_info(creds_info)
@@ -57,88 +57,71 @@ def get_bq_data():
     """
     return client.query(query).to_dataframe()
 
-
 # -----------------------------
 # GI* Hotspot Code
 # -----------------------------
-@st.cache_data(show_spinner="Computing cluster hotspots…", ttl=300)
+@st.cache_data(show_spinner="Computing cluster hotspots...", ttl=300)
 def add_gistar_hotspots(
     _buildings_gdf: gpd.GeoDataFrame,
     damaged_col: str = "prediction_class",
     damaged_value: int = 1,
     ) -> gpd.GeoDataFrame: 
-      """
-      Computes Getis-Ord Gi* hotspots on a binary damaged indicator using KNN neighbors.
-      Uses FDR (Benjamini–Hochberg) correction to reduce false positives.
-      """
 
-      # define parameters
-      k = 12  # for mixed spacing
-      permutations = 199  # fast enough for a live dashboard
-      alpha = 0.01  # more conservative than the standard 0.05 since this dashboard is for search and rescue operations
+    k = 12
+    permutations = 199
+    alpha = 0.01
 
-      gdf = _buildings_gdf.copy()
+    gdf = _buildings_gdf.copy()
 
-      # ensure CRS exists or use projected CRS
-      if gdf.crs is None:
+    if gdf.crs is None:
         gdf = gdf.set_crs(4326)
-      if gdf.crs.is_geographic:
-          gdf_proj = gdf.to_crs(gdf.estimate_utm_crs())
-      else:
-          gdf_proj = gdf
-  
-      # use centroids for KNN calculations
-      pts = gdf_proj.copy()
-      pts["geometry"] = pts.geometry.centroid
-  
-      # ensure prediction_class is numeric (0/1)
-      y = pd.to_numeric(pts[damaged_col], errors="coerce").fillna(0).astype(int).to_numpy()
-      y = (y == damaged_value).astype(int)  # damaged = 1, undamaged = 0
-  
-      # build weights
-      w = KNN.from_dataframe(pts, k=k)
-      w.transform = "R" # row standardization
-  
-      # Local Gi* (G_Local)
-      g_local = G_Local(y, w, permutations=permutations, star=True)
-  
-      # Attach results to original gdf, aligned by row order
-      out = gdf.copy()
-      out["gi_z"] = g_local.Zs
-      out["gi_p"] = g_local.p_sim
-  
-      # multiple-testing correction (FDR / BH) - protecting against false positives
-      pvals = out["gi_p"].fillna(1.0).to_numpy()
-      reject, pvals_fdr, _, _ = multipletests(pvals, alpha=alpha, method="fdr_bh")
-      out["gi_p_fdr"] = pvals_fdr
-      out["gi_sig"] = reject
-  
-      # categorize hotspot using FDR-adjusted significance
-      out["gi_cat"] = "Not significant"
-      sig = out["gi_sig"]
-      out.loc[sig & (out["gi_z"] > 0), "gi_cat"] = "Hotspot (damaged cluster)"
-      out.loc[sig & (out["gi_z"] < 0), "gi_cat"] = "Coldspot (undamaged cluster)"
+    
+    if gdf.crs.is_geographic:
+        gdf_proj = gdf.to_crs(gdf.estimate_utm_crs())
+    else:
+        gdf_proj = gdf
 
-      return out
+    pts = gdf_proj.copy()
+    pts["geometry"] = pts.geometry.centroid
 
+    y = pd.to_numeric(pts[damaged_col], errors="coerce").fillna(0).astype(int).to_numpy()
+    y = (y == damaged_value).astype(int)
+
+    w = KNN.from_dataframe(pts, k=k)
+    w.transform = "R"
+
+    g_local = G_Local(y, w, permutations=permutations, star=True)
+
+    out = gdf.copy()
+    out["gi_z"] = g_local.Zs
+    out["gi_p"] = g_local.p_sim
+
+    pvals = out["gi_p"].fillna(1.0).to_numpy()
+    reject, pvals_fdr, _, _ = multipletests(pvals, alpha=alpha, method="fdr_bh")
+    out["gi_p_fdr"] = pvals_fdr
+    out["gi_sig"] = reject
+
+    out["gi_cat"] = "Not significant"
+    sig = out["gi_sig"]
+    out.loc[sig & (out["gi_z"] > 0), "gi_cat"] = "Hotspot (damaged cluster)"
+    out.loc[sig & (out["gi_z"] < 0), "gi_cat"] = "Coldspot (undamaged cluster)"
+
+    return out
+
+# -----------------------------
+# Data Loading and Transformation
+# -----------------------------
 try:
-    # gdf = get_bq_data()
     df = get_bq_data()
-
-    # --- NEW REPROJECTION CODE START ---
-    # 1. Convert WKT string to actual geometry objects
+    # Convert WKT to geometry
     df['geometry'] = df['geometry'].apply(wkt.loads)
-    
-    # 2. Convert DataFrame to GeoDataFrame and set initial CRS (UTM 13N)
+    # Create GeoDataFrame from UTM 13N
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs="EPSG:32613")
-    
-    # 3. Transform to WGS84 (Degrees) so the maps and stats work
+    # Transform to Degrees for mapping
     gdf = gdf.to_crs(epsg=4326)
-    # --- NEW REPROJECTION CODE END ---
-
 
     # -----------------------------
-    # Model Performance
+    # Model Performance Expander
     # -----------------------------
     with st.expander("View Model Performance Metrics"):
         col1, col2 = st.columns(2)
@@ -159,151 +142,19 @@ try:
         with col2:
             st.write("Prediction Distribution")
             fig2, ax2 = plt.subplots(figsize=(4, 3))
-
+            # Fixed Seaborn warning by assigning hue
             sns.countplot(
                 x=gdf['prediction_class'].astype(int),
+                hue=gdf['prediction_class'].astype(int),
                 ax=ax2,
                 palette=['#00FFFF', '#FF4500'],
-                order=[0, 1]
+                order=[0, 1],
+                legend=False
             )
-
+            ax2.set_xticks([0, 1])
             ax2.set_xticklabels(["Undamaged", "Damaged"])
             ax2.set_xlabel("Status")
             ax2.set_ylabel("Count")
-            st.pyplot(fig2)
-
-except Exception as e:
-    st.error(f"Error loading data: {e}")
-    st.stop()
-
-    # -----------------------------
-    # Enabling cluserting hotspots
-    # -----------------------------
-    if enable_hotspots:
-        gdf = add_gistar_hotspots(
-            _buildings_gdf=gdf,
-            damaged_col="prediction_class",
-            damaged_value=1,
-        )
-
-        # hotspot legend
-        st.markdown(
-            """
-            <div style="margin-bottom:10px; font-weight:bold;">Hotspot Legend</div>
-            <div style="display:flex; gap:20px; align-items:center; margin-bottom: 10px;">
-              <div style="width:20px; height:20px; background-color:#d7191c; border:1px solid white;"></div>
-              <span>Hotspot (damaged cluster)</span>
-              <div style="width:20px; height:20px; background-color:#2c7bb6; border:1px solid white;"></div>
-              <span>Coldspot (undamaged cluster)</span>
-              <div style="width:20px; height:20px; background-color:#bdbdbd; border:1px solid white;"></div>
-              <span>Not significant</span>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        # assign fill colors as arrays for pydeck
-        hotspot_colors = {
-            "Hotspot (damaged cluster)": [215, 25, 28],   # red
-            "Coldspot (undamaged cluster)": [44, 123, 182], # blue
-            "Not significant": [189, 189, 189]            # gray
-        }
-        gdf["fill_color"] = gdf["gi_cat"].map(hotspot_colors)
-        default_color = [189, 189, 189]
-        gdf["fill_color"] = gdf["fill_color"].apply(
-            lambda x: x if isinstance(x, list) else default_color
-        )
-
-        tooltip_html = (
-            "<b>Building ID:</b> {id}<br>"
-            "<b>Actual Label:</b> {label}<br>"
-            "<b>Prediction:</b> {prediction_class}<br>"
-            "<b>Gi* z:</b> {gi_z}<br>"
-            "<b>p-value (raw):</b> {gi_p}<br>"
-            "<b>p-value (FDR):</b> {gi_p_fdr}<br>"
-            "<b>Category:</b> {gi_cat}"
-        )
-        get_fill_color = "fill_color"
-
-    else:
-        # -----------------------------
-        # original Legend
-        # -----------------------------
-        st.markdown(f"""
-        <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 10px; font-weight: bold;">
-          <div style="width: 20px; height: 20px; background-color: rgb(0, 255, 255); border: 1px solid white;"></div>
-          <span>Undamaged</span>
-          <div style="width: 20px; height: 20px; background-color: rgb(255, 69, 0); border: 1px solid white;"></div>
-          <span>Damaged</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-        tooltip_html = (
-            "<b>Building ID:</b> {id}<br>"
-            "<b>Actual Label:</b> {label}<br>"
-            "<b>Prediction:</b> {prediction_class}"
-        )
-        get_fill_color = "prediction_class == '1' || prediction_class == 1 ? [255, 69, 0] : [0, 255, 255]"
-
-    # -----------------------------
-# Build Map
-# -----------------------------
-# 1. Ensure we have data before mapping
-if not gdf.empty:
-    
-    # 2. Fix the Centroid Warning & centering issue
-    # We briefly project to a meter-based system (UTM) to find the true center,
-    # then convert that single point back to Lat/Lon for Pydeck.
-    try:
-        # estimate_utm_crs() finds the best local meter-based projection automatically
-        projected_gdf = gdf.to_crs(gdf.estimate_utm_crs())
-        center = projected_gdf.geometry.unary_union.centroid
-        
-        # Convert center point back to WGS84 (Degrees)
-        import shapely.ops as ops
-        from functools import partial
-        import pyproj
-
-        transformer = pyproj.Transformer.from_crs(projected_gdf.crs, "EPSG:4326", always_xy=True).transform
-        lon, lat = ops.transform(transformer, center).x, ops.transform(transformer, center).y
-    except:
-        # Fallback if the fancy math fails: just average the current coordinates
-        lat = gdf.geometry.centroid.y.mean()
-        lon = gdf.geometry.centroid.x.mean()
-
-    # 3. Define the Layer
-    # Using __geo_interface__ ensures Pydeck sees the GeoJSON structure perfectly
-    polygon_layer = pdk.Layer(
-        "GeoJsonLayer",
-        gdf.__geo_interface__, 
-        opacity=0.9,
-        stroked=True,
-        get_line_color=[255, 255, 255],
-        line_width_min_pixels=1,
-        filled=True,
-        get_fill_color=get_fill_color,
-        pickable=True,
-    )
-
-    # 4. Set the View State
-    view_state = pdk.ViewState(
-        latitude=lat,
-        longitude=lon,
-        zoom=15,
-        pitch=45,
-    )
-
-    # 5. Render
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=[polygon_layer],
-            initial_view_state=view_state,
-            tooltip={"html": tooltip_html},
-            map_style="mapbox://styles/mapbox/satellite-v9" # Satellite view is great for wildfire damage
-        )
-    )
-else:
-    st.warning("No data found to display on the map.")
 
 # except Exception as e:
 #     st.error(f"Failed to load data from BigQuery: {e}")
