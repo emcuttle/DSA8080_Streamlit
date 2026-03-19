@@ -136,12 +136,6 @@ try:
     gdf = gdf.to_crs(epsg=4326)
     # --- NEW REPROJECTION CODE END ---
 
-    # -----------------------------
-    # Model Performance
-    # -----------------------------
-    with st.expander("View Model Performance Metrics"):
-        # ... rest of your code ...
-  
 
     # -----------------------------
     # Model Performance
