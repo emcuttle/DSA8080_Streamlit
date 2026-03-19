@@ -173,8 +173,8 @@ try:
             st.pyplot(fig2)
 
 except Exception as e:
-st.error(f"Error loading data: {e}")
-st.stop()
+    st.error(f"Error loading data: {e}")
+    st.stop()
 
     # -----------------------------
     # Enabling cluserting hotspots
