@@ -156,6 +156,6 @@ try:
             ax2.set_xlabel("Status")
             ax2.set_ylabel("Count")
 
-# except Exception as e:
-#     st.error(f"Failed to load data from BigQuery: {e}")
-#     st.info("Check your GCP credentials, ensure the BigQuery View exists, and verify dependencies in requirements.txt.")
+except Exception as e:
+    st.error(f"Failed to load data from BigQuery: {e}")
+    st.info("Check your GCP credentials, ensure the BigQuery View exists, and verify dependencies in requirements.txt.")
