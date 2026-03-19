@@ -172,9 +172,9 @@ try:
             ax2.set_ylabel("Count")
             st.pyplot(fig2)
 
-    except Exception as e:
-    st.error(f"Error loading data: {e}")
-    st.stop()
+except Exception as e:
+st.error(f"Error loading data: {e}")
+st.stop()
 
     # -----------------------------
     # Enabling cluserting hotspots
