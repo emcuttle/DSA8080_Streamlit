@@ -300,3 +300,7 @@ if not gdf.empty:
     )
 else:
     st.warning("No data found to display on the map.")
+
+except Exception as e:
+    st.error(f"Failed to load data from BigQuery: {e}")
+    st.info("Check your GCP credentials, ensure the BigQuery View exists, and verify dependencies in requirements.txt.")
