@@ -1,5 +1,5 @@
 # -----------------------------
-# Streamlit App (DBSCAN Hotspots - FULL COPY/PASTE, BROADCAST FIXED)
+# Streamlit App (DBSCAN Hotspots - FULL COPY/PASTE, FIXED vars()/serialization)
 # -----------------------------
 import streamlit as st
 import pandas as pd
@@ -70,8 +70,8 @@ def get_bq_data():
 # -----------------------------
 # DBSCAN hotspot computation (cached)
 # IMPORTANT:
-#  - _buildings_gdf has underscore so Streamlit doesn't hash it. [3](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
-#  - cache_key is hashable so changing intensity forces recompute. [3](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
+#  - _buildings_gdf has underscore so Streamlit doesn't hash it. [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
+#  - cache_key is hashable so changing intensity forces recompute. [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
 # -----------------------------
 @st.cache_data(show_spinner="Computing DBSCAN hotspots…", ttl=300)
 def add_dbscan_hotspots(
@@ -144,14 +144,17 @@ def add_dbscan_hotspots(
         if not hotspot_areas_ll.crs.is_geographic:
             hotspot_areas_ll = hotspot_areas_ll.to_crs(4326)
 
-    # Prepare circle centers (cluster centroid + radius in meters)
-    circles_ll = None
+    # IMPORTANT FIX:
+    # Build circle centers as a *plain pandas DataFrame* (no geometry objects),
+    # so ScatterplotLayer doesn't attempt to serialize shapely geometries.
+    circles_df = pd.DataFrame(columns=["lon", "lat", "radius_m"])
     if hotspot_areas_ll is not None and not hotspot_areas_ll.empty:
-        circles_ll = hotspot_areas_ll.copy()
-        circles_ll["centroid"] = circles_ll.geometry.centroid
-        circles_ll["lon"] = circles_ll["centroid"].x
-        circles_ll["lat"] = circles_ll["centroid"].y
-        circles_ll["radius_m"] = float(buffer_meters)  # big circle radius
+        cent = hotspot_areas_ll.geometry.centroid
+        circles_df = pd.DataFrame({
+            "lon": cent.x.to_numpy(),
+            "lat": cent.y.to_numpy(),
+            "radius_m": np.full(len(hotspot_areas_ll), float(buffer_meters))
+        })
 
     debug = {
         "damaged_count": damaged_count,
@@ -159,7 +162,7 @@ def add_dbscan_hotspots(
         "hotspot_polygon_count": int(0 if hotspot_areas_ll is None else len(hotspot_areas_ll)),
     }
 
-    return buildings_out, hotspot_areas_ll, circles_ll, debug
+    return buildings_out, hotspot_areas_ll, circles_df, debug
 
 # -----------------------------
 # Main
@@ -209,7 +212,7 @@ try:
             st.pyplot(fig2)
 
     # -----------------------------
-    # Intensity parameters (tuned to avoid "High=0" for your data)
+    # Intensity parameters (more separated; avoid High=0)
     # -----------------------------
     intensity_params = {
         "Low":    {"eps": 650, "min_samples": 15,  "buffer": 750},
@@ -219,13 +222,13 @@ try:
     params = intensity_params[intensity]
 
     hotspot_areas = None
-    circles_ll = None
+    circles_df = pd.DataFrame(columns=["lon", "lat", "radius_m"])
     debug = {"damaged_count": 0, "cluster_count": 0, "hotspot_polygon_count": 0}
 
     if enable_hotspots:
         cache_key = f"{intensity}|eps={params['eps']}|min={params['min_samples']}|buf={params['buffer']}|rows={len(gdf)}"
 
-        gdf, hotspot_areas, circles_ll, debug = add_dbscan_hotspots(
+        gdf, hotspot_areas, circles_df, debug = add_dbscan_hotspots(
             gdf,
             cache_key=cache_key,
             damaged_col="prediction_class_num",
@@ -238,22 +241,8 @@ try:
         st.sidebar.caption(f"DBSCAN clusters found: {debug['cluster_count']}")
         st.sidebar.caption(f"Hotspot polygons: {debug['hotspot_polygon_count']}")
 
-        st.markdown(
-            f"""
-            <div style="margin-bottom:10px; font-weight:bold;">DBSCAN Hotspot Settings</div>
-            <div style="margin-bottom:6px;">
-              <span style="font-weight:bold;">Intensity:</span> {intensity}
-              &nbsp;|&nbsp; <span style="font-weight:bold;">eps:</span> {params["eps"]} m
-              &nbsp;|&nbsp; <span style="font-weight:bold;">min_samples:</span> {params["min_samples"]}
-              &nbsp;|&nbsp; <span style="font-weight:bold;">buffer:</span> {params["buffer"]} m
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
     # -----------------------------
-    # Building fill colors (FIXED: no np.where broadcasting)
-    # Each row gets its own [r,g,b,a] list
+    # Building fill colors (safe list-of-lists)
     # -----------------------------
     preds = gdf["prediction_class_num"].astype(int).tolist()
     gdf["fill_color"] = [
@@ -296,7 +285,7 @@ try:
             filled=True,
             get_fill_color=[255, 165, 0, 160],   # orange fill
             get_line_color=[255, 120, 0, 255],   # darker outline
-            # Line width knobs that keep outlines visible at zoom levels
+            # outline visibility controls [2](https://alasarr.github.io/deck.gl/docs/api-reference/layers/geojson-layer)[3](https://deck.gl/docs/api-reference/layers/geojson-layer)
             get_line_width=1,
             line_width_scale=10,
             line_width_min_pixels=3,
@@ -304,11 +293,11 @@ try:
         )
         layers.append(hotspot_blob_layer)
 
-    # --- Big circles at cluster centroids (very visible rings)
-    if enable_hotspots and circles_ll is not None and not circles_ll.empty:
+    # --- Big circles at cluster centroids (plain DataFrame -> avoids vars() serialization error)
+    if enable_hotspots and circles_df is not None and not circles_df.empty:
         circle_layer = pdk.Layer(
             "ScatterplotLayer",
-            circles_ll,
+            circles_df,
             get_position=["lon", "lat"],
             get_radius="radius_m",
             radius_units="meters",
