@@ -1,5 +1,5 @@
 # -----------------------------
-# Streamlit App (DBSCAN Hotspots - FULL COPY/PASTE)
+# Streamlit App (DBSCAN Hotspots - FULL COPY/PASTE, BROADCAST FIXED)
 # -----------------------------
 import streamlit as st
 import pandas as pd
@@ -41,7 +41,6 @@ with st.sidebar.expander("What are cluster hotspots?"):
         "large hotspot blobs/circles around clusters."
     )
 
-# Helpful for debugging deployments/caching
 if st.sidebar.button("Clear Streamlit caches"):
     st.cache_data.clear()
     st.sidebar.success("Caches cleared. App will recompute on rerun.")
@@ -71,8 +70,8 @@ def get_bq_data():
 # -----------------------------
 # DBSCAN hotspot computation (cached)
 # IMPORTANT:
-#  - _buildings_gdf starts with underscore so Streamlit won't hash it. [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
-#  - cache_key is hashable so changing intensity forces recompute. [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
+#  - _buildings_gdf has underscore so Streamlit doesn't hash it. [3](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
+#  - cache_key is hashable so changing intensity forces recompute. [3](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
 # -----------------------------
 @st.cache_data(show_spinner="Computing DBSCAN hotspots…", ttl=300)
 def add_dbscan_hotspots(
@@ -210,12 +209,12 @@ try:
             st.pyplot(fig2)
 
     # -----------------------------
-    # Intensity parameters (more separated for your 1388 damaged)
+    # Intensity parameters (tuned to avoid "High=0" for your data)
     # -----------------------------
     intensity_params = {
-        "Low":    {"eps": 650, "min_samples": 15,  "buffer": 750},  # big/broad blobs
-        "Medium": {"eps": 350, "min_samples": 45,  "buffer": 450},  # balanced
-        "High":   {"eps": 250, "min_samples": 70,  "buffer": 300},  # tighter but not zero
+        "Low":    {"eps": 650, "min_samples": 15,  "buffer": 750},
+        "Medium": {"eps": 350, "min_samples": 45,  "buffer": 450},
+        "High":   {"eps": 250, "min_samples": 70,  "buffer": 300},
     }
     params = intensity_params[intensity]
 
@@ -253,13 +252,14 @@ try:
         )
 
     # -----------------------------
-    # Building fill colors
+    # Building fill colors (FIXED: no np.where broadcasting)
+    # Each row gets its own [r,g,b,a] list
     # -----------------------------
-    gdf["fill_color"] = np.where(
-        gdf["prediction_class_num"].astype(int) == 1,
-        [[255, 69, 0, 220]] * len(gdf),    # damaged
-        [[0, 255, 255, 220]] * len(gdf)    # undamaged
-    )
+    preds = gdf["prediction_class_num"].astype(int).tolist()
+    gdf["fill_color"] = [
+        [255, 69, 0, 220] if v == 1 else [0, 255, 255, 220]
+        for v in preds
+    ]
 
     tooltip_html = (
         "<b>Building ID:</b> {id}<br>"
@@ -296,7 +296,7 @@ try:
             filled=True,
             get_fill_color=[255, 165, 0, 160],   # orange fill
             get_line_color=[255, 120, 0, 255],   # darker outline
-            # IMPORTANT: line width knobs that make outlines visible
+            # Line width knobs that keep outlines visible at zoom levels
             get_line_width=1,
             line_width_scale=10,
             line_width_min_pixels=3,
@@ -304,7 +304,7 @@ try:
         )
         layers.append(hotspot_blob_layer)
 
-    # --- Big circles at cluster centroids (super visible “circles around clusters”)
+    # --- Big circles at cluster centroids (very visible rings)
     if enable_hotspots and circles_ll is not None and not circles_ll.empty:
         circle_layer = pdk.Layer(
             "ScatterplotLayer",
