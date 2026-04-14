@@ -1,5 +1,5 @@
 # -----------------------------
-# Streamlit App (DBSCAN Hotspots - FULL FIX)
+# Streamlit App (DBSCAN Hotspots - FULL COPY/PASTE)
 # -----------------------------
 import streamlit as st
 import pandas as pd
@@ -14,7 +14,7 @@ from sklearn.cluster import DBSCAN
 import json
 
 # -----------------------------
-# Title
+# Dashboard title
 # -----------------------------
 st.title("Marshall CO Wildfire: Building Damage Statuses")
 
@@ -29,25 +29,25 @@ intensity = st.sidebar.select_slider(
     options=["Low", "Medium", "High"],
     value="Medium",
     help=(
-        "Low = more permissive (larger eps, smaller min_samples -> more/bigger blobs)\n"
-        "High = stricter (smaller eps, larger min_samples -> fewer/tighter blobs)"
+        "Low = more permissive (larger eps, smaller min_samples → bigger/more blobs)\n"
+        "High = stricter (smaller eps, larger min_samples → fewer/tighter blobs)"
     ),
 )
 
 with st.sidebar.expander("What are cluster hotspots?"):
     st.write(
         "DBSCAN hotspots highlight dense clusters of predicted damaged buildings. "
-        "We cluster damaged building centroids, then buffer and dissolve them to create "
-        "large hotspot blobs around clusters."
+        "We cluster damaged-building centroids, then buffer and dissolve clusters to create "
+        "large hotspot blobs/circles around clusters."
     )
 
-# Optional: easy cache reset button while debugging deployments
+# Helpful for debugging deployments/caching
 if st.sidebar.button("Clear Streamlit caches"):
     st.cache_data.clear()
-    st.sidebar.success("Caches cleared. Rerun will recompute.")
+    st.sidebar.success("Caches cleared. App will recompute on rerun.")
 
 # -----------------------------
-# BigQuery client + data pull
+# BigQuery connection
 # -----------------------------
 def get_bq_client():
     if "gcp_service_account" in st.secrets:
@@ -69,20 +69,20 @@ def get_bq_data():
     return client.query(query).to_geodataframe()
 
 # -----------------------------
-# DBSCAN hotspot computation
+# DBSCAN hotspot computation (cached)
 # IMPORTANT:
-# - _buildings_gdf has a leading underscore so Streamlit does NOT try to hash it. [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
-# - cache_key is a hashable string that forces recompute when intensity/params change. [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
+#  - _buildings_gdf starts with underscore so Streamlit won't hash it. [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
+#  - cache_key is hashable so changing intensity forces recompute. [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
 # -----------------------------
-@st.cache_data(show_spinner="Computing DBSCAN cluster hotspots…", ttl=300)
-def add_dbscan_hotspots_v2(
-    _buildings_gdf: gpd.GeoDataFrame,  # <-- excluded from hashing by Streamlit [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
-    cache_key: str,                   # <-- hashed; changing this forces recompute [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
+@st.cache_data(show_spinner="Computing DBSCAN hotspots…", ttl=300)
+def add_dbscan_hotspots(
+    _buildings_gdf: gpd.GeoDataFrame,
+    cache_key: str,
     damaged_col: str = "prediction_class_num",
     damaged_value: int = 1,
-    eps_meters: float = 300,
-    min_samples: int = 50,
-    buffer_meters: float = 350,
+    eps_meters: float = 350,
+    min_samples: int = 45,
+    buffer_meters: float = 450,
 ):
     gdf = _buildings_gdf.copy()
 
@@ -90,7 +90,7 @@ def add_dbscan_hotspots_v2(
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
 
-    # Project to meters for DBSCAN eps/buffer
+    # Project to meters for DBSCAN/buffering
     if gdf.crs.is_geographic:
         gdf_proj = gdf.to_crs(gdf.estimate_utm_crs())
     else:
@@ -99,7 +99,7 @@ def add_dbscan_hotspots_v2(
     # Centroids for clustering
     centroids = gdf_proj.geometry.centroid
 
-    # Build damaged mask
+    # Damaged mask (force numeric)
     y = pd.to_numeric(gdf_proj[damaged_col], errors="coerce").fillna(0).astype(int)
     damaged_mask = (y == damaged_value)
     damaged_count = int(damaged_mask.sum())
@@ -107,7 +107,7 @@ def add_dbscan_hotspots_v2(
     # Default labels = noise
     all_labels = np.full(len(gdf_proj), -1, dtype=int)
 
-    # Placeholder hotspot polygons
+    # Hotspot blobs (cluster polygons)
     hotspot_areas = gpd.GeoDataFrame({"cluster": [], "geometry": []}, crs=gdf_proj.crs)
     cluster_count = 0
 
@@ -120,7 +120,6 @@ def add_dbscan_hotspots_v2(
         labels = DBSCAN(eps=eps_meters, min_samples=min_samples, metric="euclidean").fit_predict(coords)
         all_labels[damaged_mask.to_numpy()] = labels
 
-        # count clusters excluding noise (-1)
         unique = set(labels.tolist())
         cluster_count = len([c for c in unique if c != -1])
 
@@ -131,21 +130,29 @@ def add_dbscan_hotspots_v2(
         )
         clustered_pts = clustered_pts[clustered_pts["cluster"] != -1].copy()
 
-        # Buffer + dissolve -> big blobs
         if not clustered_pts.empty:
             clustered_pts["geometry"] = clustered_pts.geometry.buffer(buffer_meters)
             hotspot_areas = clustered_pts.dissolve(by="cluster", as_index=False)[["cluster", "geometry"]]
 
-    # Attach cluster labels back to original (same row order)
+    # Attach labels back to original
     buildings_out = gdf.copy()
     buildings_out["db_cluster"] = all_labels
     buildings_out["db_is_hotspot"] = buildings_out["db_cluster"] != -1
 
-    # Convert hotspot polygons to lat/lon for mapping
+    # Convert hotspot polygons back to lat/lon for mapping
     hotspot_areas_ll = hotspot_areas
     if hotspot_areas_ll is not None and not hotspot_areas_ll.empty:
         if not hotspot_areas_ll.crs.is_geographic:
             hotspot_areas_ll = hotspot_areas_ll.to_crs(4326)
+
+    # Prepare circle centers (cluster centroid + radius in meters)
+    circles_ll = None
+    if hotspot_areas_ll is not None and not hotspot_areas_ll.empty:
+        circles_ll = hotspot_areas_ll.copy()
+        circles_ll["centroid"] = circles_ll.geometry.centroid
+        circles_ll["lon"] = circles_ll["centroid"].x
+        circles_ll["lat"] = circles_ll["centroid"].y
+        circles_ll["radius_m"] = float(buffer_meters)  # big circle radius
 
     debug = {
         "damaged_count": damaged_count,
@@ -153,21 +160,21 @@ def add_dbscan_hotspots_v2(
         "hotspot_polygon_count": int(0 if hotspot_areas_ll is None else len(hotspot_areas_ll)),
     }
 
-    return buildings_out, hotspot_areas_ll, debug
+    return buildings_out, hotspot_areas_ll, circles_ll, debug
 
 # -----------------------------
-# Main execution
+# Main
 # -----------------------------
 try:
     gdf = get_bq_data()
 
-    # Normalize prediction column
+    # Normalize prediction column to int
     gdf["prediction_class_num"] = pd.to_numeric(gdf["prediction_class"], errors="coerce").fillna(0).astype(int)
     pred_damaged_count = int((gdf["prediction_class_num"] == 1).sum())
     st.sidebar.caption(f"Predicted damaged buildings: {pred_damaged_count}")
 
     # -----------------------------
-    # Model performance expander
+    # Model Performance
     # -----------------------------
     with st.expander("View Model Performance Metrics"):
         col1, col2 = st.columns(2)
@@ -176,8 +183,8 @@ try:
             st.write("Confusion Matrix")
             y_true = pd.to_numeric(gdf["label"], errors="coerce").fillna(0).astype(int)
             y_pred = gdf["prediction_class_num"].astype(int)
-
             cm = confusion_matrix(y_true, y_pred)
+
             fig, ax = plt.subplots(figsize=(4, 3))
             sns.heatmap(
                 cm, annot=True, fmt="d", cmap="Blues", ax=ax,
@@ -202,152 +209,141 @@ try:
             ax2.set_ylabel("Count")
             st.pyplot(fig2)
 
-# -----------------------------
-# Intensity -> DBSCAN Params (more separated for 1388 damaged)
-# -----------------------------
-intensity_params = {
-    # Low: very permissive => big blobs, more clusters
-    "Low":    {"eps": 650, "min_samples": 15,  "buffer": 750},
+    # -----------------------------
+    # Intensity parameters (more separated for your 1388 damaged)
+    # -----------------------------
+    intensity_params = {
+        "Low":    {"eps": 650, "min_samples": 15,  "buffer": 750},  # big/broad blobs
+        "Medium": {"eps": 350, "min_samples": 45,  "buffer": 450},  # balanced
+        "High":   {"eps": 250, "min_samples": 70,  "buffer": 300},  # tighter but not zero
+    }
+    params = intensity_params[intensity]
 
-    # Medium: balanced
-    "Medium": {"eps": 350, "min_samples": 45,  "buffer": 450},
+    hotspot_areas = None
+    circles_ll = None
+    debug = {"damaged_count": 0, "cluster_count": 0, "hotspot_polygon_count": 0}
 
-    # High: strict, but NOT zero => tighten a lot but still should yield something
-    "High":   {"eps": 220, "min_samples": 90,  "buffer": 275},
-}
-params = intensity_params[intensity]
+    if enable_hotspots:
+        cache_key = f"{intensity}|eps={params['eps']}|min={params['min_samples']}|buf={params['buffer']}|rows={len(gdf)}"
 
-hotspot_areas = None
-debug = {"damaged_count": 0, "cluster_count": 0, "hotspot_polygon_count": 0}
+        gdf, hotspot_areas, circles_ll, debug = add_dbscan_hotspots(
+            gdf,
+            cache_key=cache_key,
+            damaged_col="prediction_class_num",
+            damaged_value=1,
+            eps_meters=float(params["eps"]),
+            min_samples=int(params["min_samples"]),
+            buffer_meters=float(params["buffer"]),
+        )
 
-if enable_hotspots:
-    cache_key = f"{intensity}|eps={params['eps']}|min={params['min_samples']}|buf={params['buffer']}|rows={len(gdf)}"
+        st.sidebar.caption(f"DBSCAN clusters found: {debug['cluster_count']}")
+        st.sidebar.caption(f"Hotspot polygons: {debug['hotspot_polygon_count']}")
 
-    gdf, hotspot_areas, debug = add_dbscan_hotspots_v2(
-        gdf,
-        cache_key=cache_key,
-        damaged_col="prediction_class_num",
-        damaged_value=1,
-        eps_meters=float(params["eps"]),
-        min_samples=int(params["min_samples"]),
-        buffer_meters=float(params["buffer"]),
+        st.markdown(
+            f"""
+            <div style="margin-bottom:10px; font-weight:bold;">DBSCAN Hotspot Settings</div>
+            <div style="margin-bottom:6px;">
+              <span style="font-weight:bold;">Intensity:</span> {intensity}
+              &nbsp;|&nbsp; <span style="font-weight:bold;">eps:</span> {params["eps"]} m
+              &nbsp;|&nbsp; <span style="font-weight:bold;">min_samples:</span> {params["min_samples"]}
+              &nbsp;|&nbsp; <span style="font-weight:bold;">buffer:</span> {params["buffer"]} m
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # -----------------------------
+    # Building fill colors
+    # -----------------------------
+    gdf["fill_color"] = np.where(
+        gdf["prediction_class_num"].astype(int) == 1,
+        [[255, 69, 0, 220]] * len(gdf),    # damaged
+        [[0, 255, 255, 220]] * len(gdf)    # undamaged
     )
 
-    st.sidebar.caption(f"DBSCAN clusters found: {debug['cluster_count']}")
-    st.sidebar.caption(f"Hotspot polygons: {debug['hotspot_polygon_count']}")
+    tooltip_html = (
+        "<b>Building ID:</b> {id}<br>"
+        "<b>Actual Label:</b> {label}<br>"
+        "<b>Prediction:</b> {prediction_class_num}<br>"
+        "<b>DBSCAN cluster:</b> {db_cluster}<br>"
+        "<b>In hotspot?:</b> {db_is_hotspot}"
+    )
 
-# -----------------------------
-# Building colors (prediction)
-# -----------------------------
-gdf["fill_color"] = np.where(
-    gdf["prediction_class_num"].astype(int) == 1,
-    [[255, 69, 0, 220]] * len(gdf),   # damaged = orange-red
-    [[0, 255, 255, 220]] * len(gdf)   # undamaged = cyan
-)
-
-tooltip_html = (
-    "<b>Building ID:</b> {id}<br>"
-    "<b>Actual Label:</b> {label}<br>"
-    "<b>Prediction:</b> {prediction_class_num}<br>"
-    "<b>DBSCAN cluster:</b> {db_cluster}<br>"
-    "<b>In hotspot?:</b> {db_is_hotspot}"
-)
-
-# -----------------------------
-# Base building layer
-# -----------------------------
-building_layer = pdk.Layer(
-    "GeoJsonLayer",
-    gdf,
-    opacity=0.85,
-    stroked=False,
-    filled=True,
-    get_fill_color="fill_color",
-    pickable=True,
-)
-
-layers = [building_layer]
-
-# -----------------------------
-# Hotspot layers (TWO WAYS):
-#  1) Blob polygons (buffer+dissolve) as GeoJsonLayer
-#  2) Big circles at cluster centroids as ScatterplotLayer (very visible)
-# -----------------------------
-if enable_hotspots and hotspot_areas is not None and not hotspot_areas.empty:
-    # --- 1) Polygon blobs (make them VERY visible)
-    hotspot_geojson = json.loads(hotspot_areas.to_json())
-
-    hotspot_blob_layer = pdk.Layer(
+    # -----------------------------
+    # Layers
+    # -----------------------------
+    building_layer = pdk.Layer(
         "GeoJsonLayer",
-        hotspot_geojson,
-        opacity=0.60,                     # overall opacity
-        stroked=True,
+        gdf,
+        opacity=0.85,
+        stroked=False,
         filled=True,
-        # Fill + outline colors
-        get_fill_color=[255, 165, 0, 160],  # orange fill with alpha
-        get_line_color=[255, 120, 0, 255],  # darker orange outline
-        # IMPORTANT: proper line width configuration for deck.gl
-        get_line_width=1,                  # base width accessor (constant 1)
-        line_width_scale=8,                # multiply by 8
-        line_width_min_pixels=3,           # guarantee visibility on screen
+        get_fill_color="fill_color",
         pickable=True,
     )
-    layers.append(hotspot_blob_layer)
 
-    # --- 2) Big circles (centroid + radius)
-    # Convert polygons to centroids for circles; make radius ~ buffer meters
-    # Ensure lat/lon for centroid coords
-    hotspot_ll = hotspot_areas.copy()
-    if hotspot_ll.crs is None:
-        hotspot_ll = hotspot_ll.set_crs(4326)
-    elif not hotspot_ll.crs.is_geographic:
-        hotspot_ll = hotspot_ll.to_crs(4326)
+    layers = [building_layer]
 
-    hotspot_ll["centroid"] = hotspot_ll.geometry.centroid
-    hotspot_ll["lon"] = hotspot_ll["centroid"].x
-    hotspot_ll["lat"] = hotspot_ll["centroid"].y
+    # --- Blob polygons (buffer+dissolve)
+    if enable_hotspots and hotspot_areas is not None and not hotspot_areas.empty:
+        hotspot_geojson = json.loads(hotspot_areas.to_json())
 
-    # Use buffer as radius (meters). ScatterplotLayer expects meters for radius in deck.gl
-    hotspot_ll["radius_m"] = float(params["buffer"])
+        hotspot_blob_layer = pdk.Layer(
+            "GeoJsonLayer",
+            hotspot_geojson,
+            opacity=0.65,
+            stroked=True,
+            filled=True,
+            get_fill_color=[255, 165, 0, 160],   # orange fill
+            get_line_color=[255, 120, 0, 255],   # darker outline
+            # IMPORTANT: line width knobs that make outlines visible
+            get_line_width=1,
+            line_width_scale=10,
+            line_width_min_pixels=3,
+            pickable=True,
+        )
+        layers.append(hotspot_blob_layer)
 
-    circle_layer = pdk.Layer(
-        "ScatterplotLayer",
-        hotspot_ll,
-        get_position=["lon", "lat"],
-        get_radius="radius_m",
-        radius_units="meters",
-        stroked=True,
-        filled=False,                      # outline-only circles
-        get_line_color=[255, 255, 0, 255], # bright yellow outline so you can't miss it
-        line_width_min_pixels=3,
-        pickable=False,
+    # --- Big circles at cluster centroids (super visible “circles around clusters”)
+    if enable_hotspots and circles_ll is not None and not circles_ll.empty:
+        circle_layer = pdk.Layer(
+            "ScatterplotLayer",
+            circles_ll,
+            get_position=["lon", "lat"],
+            get_radius="radius_m",
+            radius_units="meters",
+            stroked=True,
+            filled=False,
+            get_line_color=[255, 255, 0, 255],  # bright yellow rings
+            line_width_min_pixels=3,
+            pickable=False,
+        )
+        layers.append(circle_layer)
+
+    # -----------------------------
+    # View state
+    # -----------------------------
+    gdf_ll = gdf
+    if gdf_ll.crs is None:
+        gdf_ll = gdf_ll.set_crs(4326)
+    if not gdf_ll.crs.is_geographic:
+        gdf_ll = gdf_ll.to_crs(4326)
+
+    view_state = pdk.ViewState(
+        latitude=float(gdf_ll.geometry.centroid.y.mean()),
+        longitude=float(gdf_ll.geometry.centroid.x.mean()),
+        zoom=14,
+        pitch=30,
     )
-    layers.append(circle_layer)
 
-# -----------------------------
-# View state
-# -----------------------------
-gdf_ll = gdf
-if gdf_ll.crs is None:
-    gdf_ll = gdf_ll.set_crs(4326)
-if not gdf_ll.crs.is_geographic:
-    gdf_ll = gdf_ll.to_crs(4326)
-
-view_state = pdk.ViewState(
-    latitude=float(gdf_ll.geometry.centroid.y.mean()),
-    longitude=float(gdf_ll.geometry.centroid.x.mean()),
-    zoom=14,
-    pitch=30,
-)
-
-st.pydeck_chart(
-    pdk.Deck(
-        layers=layers,
-        initial_view_state=view_state,
-        tooltip={"html": tooltip_html},
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=layers,
+            initial_view_state=view_state,
+            tooltip={"html": tooltip_html},
+        )
     )
-)
 
 except Exception as e:
     st.error(f"App error: {e}")
-    st.info("Tip: If you just changed code on Streamlit Cloud, try 'Clear Streamlit caches' in the sidebar and rerun.")
+    st.info("If this happened after code changes, try the 'Clear Streamlit caches' button in the sidebar.")
