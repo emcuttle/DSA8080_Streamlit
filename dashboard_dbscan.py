@@ -68,65 +68,51 @@ def get_bq_data():
 # -----------------------------
 @st.cache_data(show_spinner="Computing DBSCAN cluster hotspots…", ttl=300)
 def add_dbscan_hotspots(
-    buildings_gdf: gpd.GeoDataFrame,
-    cache_key: str,  # <-- IMPORTANT: include intensity/params so cache doesn't reuse old result
-    damaged_col: str = "prediction_class",
+    _buildings_gdf: gpd.GeoDataFrame,  # <-- underscore so Streamlit won't hash it
+    cache_key: str,                    # <-- hashed; changing this forces recompute
+    damaged_col: str = "prediction_class_num",
     damaged_value: int = 1,
     eps_meters: float = 250,
     min_samples: int = 25,
     buffer_meters: float = 300
 ):
-    """
-    DBSCAN cluster hotspots for predicted damaged buildings.
-
-    Returns:
-      - buildings_out: original polygons with dbscan columns added
-      - hotspot_areas_ll: dissolved hotspot polygons in EPSG:4326 (for mapping)
-      - debug: dict of counts for sidebar
-    """
-
-    gdf = buildings_gdf.copy()
+    gdf = _buildings_gdf.copy()
 
     # Ensure CRS exists (assume EPSG:4326 if missing)
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
 
-    # Project to a CRS in meters if currently geographic (degrees)
+    # Project to meters if needed
     if gdf.crs.is_geographic:
         gdf_proj = gdf.to_crs(gdf.estimate_utm_crs())
     else:
         gdf_proj = gdf
 
-    # Centroids as a GeoSeries (so .x and .y work reliably)
     centroids = gdf_proj.geometry.centroid
 
-    # Damaged mask (force numeric)
     y = pd.to_numeric(gdf_proj[damaged_col], errors="coerce").fillna(0).astype(int)
     damaged_mask = (y == damaged_value)
     damaged_count = int(damaged_mask.sum())
 
-    # Initialize everything as noise (-1)
     all_labels = np.full(len(gdf_proj), -1, dtype=int)
     hotspot_areas = gpd.GeoDataFrame({"cluster": [], "geometry": []}, crs=gdf_proj.crs)
 
     cluster_count = 0
 
     if damaged_count > 0:
-        coords = np.column_stack([centroids[damaged_mask].x.to_numpy(),
-                                  centroids[damaged_mask].y.to_numpy()])
+        coords = np.column_stack([
+            centroids[damaged_mask].x.to_numpy(),
+            centroids[damaged_mask].y.to_numpy()
+        ])
 
-        # Run DBSCAN
         clusterer = DBSCAN(eps=eps_meters, min_samples=min_samples, metric="euclidean")
         labels = clusterer.fit_predict(coords)
 
-        # write labels back
         all_labels[damaged_mask.to_numpy()] = labels
 
-        # Count clusters (exclude noise=-1)
         unique = set(labels.tolist())
         cluster_count = len([c for c in unique if c != -1])
 
-        # build hotspot polygons (buffer + dissolve) for clustered points
         clustered_pts = gpd.GeoDataFrame(
             {"cluster": labels},
             geometry=centroids[damaged_mask],
@@ -138,17 +124,13 @@ def add_dbscan_hotspots(
             clustered_pts["geometry"] = clustered_pts.geometry.buffer(buffer_meters)
             hotspot_areas = clustered_pts.dissolve(by="cluster", as_index=False)[["cluster", "geometry"]]
 
-    # Attach labels back to original (unprojected) gdf (same row order)
     buildings_out = gdf.copy()
     buildings_out["db_cluster"] = all_labels
     buildings_out["db_is_hotspot"] = buildings_out["db_cluster"] != -1
 
-    # Convert hotspot polygons back to EPSG:4326 for pydeck
     hotspot_areas_ll = hotspot_areas
     if hotspot_areas_ll is not None and not hotspot_areas_ll.empty:
-        if hotspot_areas_ll.crs is None:
-            hotspot_areas_ll = hotspot_areas_ll.set_crs(4326)
-        elif not hotspot_areas_ll.crs.is_geographic:
+        if not hotspot_areas_ll.crs.is_geographic:
             hotspot_areas_ll = hotspot_areas_ll.to_crs(4326)
 
     debug = {
