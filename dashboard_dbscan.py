@@ -1,5 +1,5 @@
 # -----------------------------
-# Imports
+# Streamlit App (DBSCAN Hotspots - FIXED)
 # -----------------------------
 import streamlit as st
 import pandas as pd
@@ -11,6 +11,7 @@ from sklearn.metrics import confusion_matrix
 import numpy as np
 import geopandas as gpd
 from sklearn.cluster import DBSCAN
+import json
 
 # -----------------------------
 # Dashboard title
@@ -28,9 +29,8 @@ intensity = st.sidebar.select_slider(
     options=["Low", "Medium", "High"],
     value="Medium",
     help=(
-        "Controls DBSCAN sensitivity:\n"
-        "- Low: more permissive (larger eps, smaller min cluster size)\n"
-        "- High: stricter (smaller eps, larger min cluster size)"
+        "Low = more permissive (larger eps, smaller min_samples => more/bigger hotspots)\n"
+        "High = stricter (smaller eps, larger min_samples => fewer/tighter hotspots)"
     ),
 )
 
@@ -38,7 +38,7 @@ with st.sidebar.expander("What are cluster hotspots?"):
     st.write(
         "DBSCAN hotspots highlight dense clusters of predicted damaged buildings. "
         "We cluster damaged-building centroids, then draw large buffered polygons around each cluster "
-        "to create the large 'circle/blob' hotspot areas."
+        "to create the 'large circles/blobs' your group prefers."
     )
 
 # -----------------------------
@@ -64,70 +64,72 @@ def get_bq_data():
     return client.query(query).to_geodataframe()
 
 # -----------------------------
-# DBSCAN Hotspot Code
+# DBSCAN Hotspot Code (with cache_key to force recompute)
 # -----------------------------
 @st.cache_data(show_spinner="Computing DBSCAN cluster hotspots…", ttl=300)
-def add_dbscan_hotspots(_buildings_gdf: gpd.GeoDataFrame,
-                        damaged_col: str = "prediction_class",
-                        damaged_value: int = 1,
-                        eps_meters: float = 250,
-                        min_samples: int = 75,
-                        buffer_meters: float = 250):
+def add_dbscan_hotspots(
+    buildings_gdf: gpd.GeoDataFrame,
+    cache_key: str,  # <-- IMPORTANT: include intensity/params so cache doesn't reuse old result
+    damaged_col: str = "prediction_class",
+    damaged_value: int = 1,
+    eps_meters: float = 250,
+    min_samples: int = 25,
+    buffer_meters: float = 300
+):
     """
     DBSCAN cluster hotspots for predicted damaged buildings.
-
-    Steps:
-      1) Project to a local CRS in meters (UTM) so eps/buffer are meters.
-      2) Cluster damaged building centroids with DBSCAN.
-      3) Buffer clustered points and dissolve by cluster id to create hotspot polygons.
 
     Returns:
       - buildings_out: original polygons with dbscan columns added
       - hotspot_areas_ll: dissolved hotspot polygons in EPSG:4326 (for mapping)
+      - debug: dict of counts for sidebar
     """
 
-    gdf = _buildings_gdf.copy()
+    gdf = buildings_gdf.copy()
 
     # Ensure CRS exists (assume EPSG:4326 if missing)
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
 
-    # Project to UTM (meters) if currently geographic (degrees)
+    # Project to a CRS in meters if currently geographic (degrees)
     if gdf.crs.is_geographic:
         gdf_proj = gdf.to_crs(gdf.estimate_utm_crs())
     else:
         gdf_proj = gdf
 
-    # Use centroids for clustering
-    pts = gdf_proj.copy()
-    pts["centroid"] = pts.geometry.centroid
+    # Centroids as a GeoSeries (so .x and .y work reliably)
+    centroids = gdf_proj.geometry.centroid
 
     # Damaged mask (force numeric)
-    y = pd.to_numeric(pts[damaged_col], errors="coerce").fillna(0).astype(int)
+    y = pd.to_numeric(gdf_proj[damaged_col], errors="coerce").fillna(0).astype(int)
     damaged_mask = (y == damaged_value)
+    damaged_count = int(damaged_mask.sum())
 
     # Initialize everything as noise (-1)
-    all_labels = np.full(len(pts), -1, dtype=int)
+    all_labels = np.full(len(gdf_proj), -1, dtype=int)
     hotspot_areas = gpd.GeoDataFrame({"cluster": [], "geometry": []}, crs=gdf_proj.crs)
 
-    # Only attempt clustering if enough damaged points exist
-    if damaged_mask.sum() >= min_samples:
-        coords = np.column_stack([
-            pts.loc[damaged_mask, "centroid"].x.to_numpy(),
-            pts.loc[damaged_mask, "centroid"].y.to_numpy()
-        ])
+    cluster_count = 0
 
-        # DBSCAN: eps is neighborhood radius; min_samples is min points to form dense region
+    if damaged_count > 0:
+        coords = np.column_stack([centroids[damaged_mask].x.to_numpy(),
+                                  centroids[damaged_mask].y.to_numpy()])
+
+        # Run DBSCAN
         clusterer = DBSCAN(eps=eps_meters, min_samples=min_samples, metric="euclidean")
         labels = clusterer.fit_predict(coords)
 
-        # Write labels back into full array
+        # write labels back
         all_labels[damaged_mask.to_numpy()] = labels
 
-        # Build hotspot polygons (exclude noise = -1)
+        # Count clusters (exclude noise=-1)
+        unique = set(labels.tolist())
+        cluster_count = len([c for c in unique if c != -1])
+
+        # build hotspot polygons (buffer + dissolve) for clustered points
         clustered_pts = gpd.GeoDataFrame(
             {"cluster": labels},
-            geometry=pts.loc[damaged_mask, "centroid"],
+            geometry=centroids[damaged_mask],
             crs=gdf_proj.crs
         )
         clustered_pts = clustered_pts[clustered_pts["cluster"] != -1].copy()
@@ -136,7 +138,7 @@ def add_dbscan_hotspots(_buildings_gdf: gpd.GeoDataFrame,
             clustered_pts["geometry"] = clustered_pts.geometry.buffer(buffer_meters)
             hotspot_areas = clustered_pts.dissolve(by="cluster", as_index=False)[["cluster", "geometry"]]
 
-    # Attach labels to ORIGINAL polygon rows (same order)
+    # Attach labels back to original (unprojected) gdf (same row order)
     buildings_out = gdf.copy()
     buildings_out["db_cluster"] = all_labels
     buildings_out["db_is_hotspot"] = buildings_out["db_cluster"] != -1
@@ -149,13 +151,24 @@ def add_dbscan_hotspots(_buildings_gdf: gpd.GeoDataFrame,
         elif not hotspot_areas_ll.crs.is_geographic:
             hotspot_areas_ll = hotspot_areas_ll.to_crs(4326)
 
-    return buildings_out, hotspot_areas_ll
+    debug = {
+        "damaged_count": damaged_count,
+        "cluster_count": cluster_count,
+        "hotspot_polygon_count": int(0 if hotspot_areas_ll is None else len(hotspot_areas_ll))
+    }
+
+    return buildings_out, hotspot_areas_ll, debug
 
 # -----------------------------
 # Main App
 # -----------------------------
 try:
     gdf = get_bq_data()
+
+    # Quick diagnostics: how many predicted damaged?
+    gdf["prediction_class_num"] = pd.to_numeric(gdf["prediction_class"], errors="coerce").fillna(0).astype(int)
+    pred_damaged_count = int((gdf["prediction_class_num"] == 1).sum())
+    st.sidebar.caption(f"Predicted damaged buildings: {pred_damaged_count}")
 
     # -----------------------------
     # Model Performance
@@ -180,7 +193,7 @@ try:
             st.write("Prediction Distribution")
             fig2, ax2 = plt.subplots(figsize=(4, 3))
             sns.countplot(
-                x=gdf["prediction_class"].astype(int),
+                x=gdf["prediction_class_num"],
                 ax=ax2,
                 palette=["#00FFFF", "#FF4500"],
                 order=[0, 1]
@@ -191,32 +204,39 @@ try:
             st.pyplot(fig2)
 
     # -----------------------------
-    # Intensity -> DBSCAN Params
+    # Intensity -> DBSCAN Params (tuned for large N)
     # -----------------------------
-    # NOTE: High intensity = stricter (tighter, fewer clusters)
     intensity_params = {
-        "Low":    {"eps": 350, "min_samples": 40, "buffer": 350},
-        "Medium": {"eps": 250, "min_samples": 75, "buffer": 250},
-        "High":   {"eps": 150, "min_samples": 120, "buffer": 200},
+        # With ~2000 damaged, these should visibly change results.
+        "Low":    {"eps": 450, "min_samples": 20,  "buffer": 500},  # more/bigger blobs
+        "Medium": {"eps": 300, "min_samples": 50,  "buffer": 350},
+        "High":   {"eps": 180, "min_samples": 120, "buffer": 250},  # fewer/tighter blobs
     }
     params = intensity_params[intensity]
 
     hotspot_areas = None
+    debug = {"damaged_count": 0, "cluster_count": 0, "hotspot_polygon_count": 0}
 
     # -----------------------------
     # Hotspot computation (DBSCAN)
     # -----------------------------
     if enable_hotspots:
-        gdf, hotspot_areas = add_dbscan_hotspots(
-            _buildings_gdf=gdf,
-            damaged_col="prediction_class",
+        # cache_key ensures recompute when intensity/params change
+        cache_key = f"{intensity}|eps={params['eps']}|min={params['min_samples']}|buf={params['buffer']}"
+
+        gdf, hotspot_areas, debug = add_dbscan_hotspots(
+            buildings_gdf=gdf,
+            cache_key=cache_key,
+            damaged_col="prediction_class_num",
             damaged_value=1,
             eps_meters=float(params["eps"]),
             min_samples=int(params["min_samples"]),
             buffer_meters=float(params["buffer"])
         )
 
-        # DBSCAN legend
+        st.sidebar.caption(f"DBSCAN clusters found: {debug['cluster_count']}")
+        st.sidebar.caption(f"Hotspot polygons: {debug['hotspot_polygon_count']}")
+
         st.markdown(
             f"""
             <div style="margin-bottom:10px; font-weight:bold;">DBSCAN Hotspot Legend</div>
@@ -225,15 +245,17 @@ try:
               &nbsp;&nbsp;|&nbsp;&nbsp;
               <span style="font-weight:bold;">eps:</span> {params["eps"]} m
               &nbsp;&nbsp;|&nbsp;&nbsp;
-              <span style="font-weight:bold;">min cluster size:</span> {params["min_samples"]}
+              <span style="font-weight:bold;">min_samples:</span> {params["min_samples"]}
+              &nbsp;&nbsp;|&nbsp;&nbsp;
+              <span style="font-weight:bold;">buffer:</span> {params["buffer"]} m
             </div>
             <div style="display:flex; gap:20px; align-items:center; margin-bottom: 10px;">
               <div style="width:20px; height:20px; background-color: rgb(0,255,255); border:1px solid white;"></div>
               <span>Undamaged (prediction)</span>
               <div style="width:20px; height:20px; background-color: rgb(255,69,0); border:1px solid white;"></div>
               <span>Damaged (prediction)</span>
-              <div style="width:20px; height:20px; background-color: rgba(255,165,0,0.25); border:3px solid orange;"></div>
-              <span>DBSCAN hotspot area (dense damaged cluster)</span>
+              <div style="width:20px; height:20px; background-color: rgba(255,165,0,0.55); border:3px solid orange;"></div>
+              <span>DBSCAN hotspot area</span>
             </div>
             """,
             unsafe_allow_html=True
@@ -242,24 +264,18 @@ try:
         tooltip_html = (
             "<b>Building ID:</b> {id}<br>"
             "<b>Actual Label:</b> {label}<br>"
-            "<b>Prediction:</b> {prediction_class}<br>"
+            "<b>Prediction:</b> {prediction_class_num}<br>"
             "<b>DBSCAN cluster:</b> {db_cluster}<br>"
             "<b>In hotspot?:</b> {db_is_hotspot}"
         )
 
-        # Fill buildings by prediction (same as original)
-        def _pred_fill(row):
-            try:
-                v = int(str(row["prediction_class"]).strip())
-            except Exception:
-                v = 0
-            return [255, 69, 0] if v == 1 else [0, 255, 255]
-
-        gdf["fill_color"] = gdf.apply(_pred_fill, axis=1)
+        # Fill buildings by prediction
+        gdf["fill_color"] = np.where(gdf["prediction_class_num"] == 1,
+                                     [[255, 69, 0]] * len(gdf),
+                                     [[0, 255, 255]] * len(gdf))
         get_fill_color = "fill_color"
 
     else:
-        # Original legend
         st.markdown(
             """
             <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 10px; font-weight: bold;">
@@ -275,9 +291,9 @@ try:
         tooltip_html = (
             "<b>Building ID:</b> {id}<br>"
             "<b>Actual Label:</b> {label}<br>"
-            "<b>Prediction:</b> {prediction_class}"
+            "<b>Prediction:</b> {prediction_class_num}"
         )
-        get_fill_color = "prediction_class == '1' || prediction_class == 1 ? [255, 69, 0] : [0, 255, 255]"
+        get_fill_color = "prediction_class_num == 1 ? [255, 69, 0] : [0, 255, 255]"
 
     # -----------------------------
     # Build Map Layers
@@ -294,17 +310,22 @@ try:
 
     layers = [building_layer]
 
-    # Hotspot overlay layer (orange blobs)
+    # Hotspot overlay layer (large circles/blobs)
     if enable_hotspots and hotspot_areas is not None and not hotspot_areas.empty:
+        # Convert to GeoJSON dict to avoid serialization edge cases
+        hotspot_geojson = json.loads(hotspot_areas.to_json())
+
         hotspot_layer = pdk.Layer(
             "GeoJsonLayer",
-            hotspot_areas,
-            opacity=0.35,
+            hotspot_geojson,
+            opacity=0.95,
             stroked=True,
             filled=True,
-            get_fill_color=[255, 165, 0, 80],   # orange fill w/ alpha
-            get_line_color=[255, 165, 0],       # orange outline
-            get_line_width=3,
+            get_fill_color=[255, 165, 0, 160],   # visible orange fill
+            get_line_color=[255, 140, 0, 255],   # visible outline
+            get_line_width=10,
+            line_width_min_pixels=2,             # ensures outline is visible
+            line_width_scale=1,
             pickable=True,
         )
         layers.append(hotspot_layer)
@@ -332,5 +353,5 @@ try:
     )
 
 except Exception as e:
-    st.error(f"Failed to load data from BigQuery: {e}")
-    st.info("Check your GCP credentials, ensure the BigQuery View exists, and verify dependencies in requirements.txt.")
+    st.error(f"App error: {e}")
+    st.info("If this happened after turning on hotspots, it may be a geometry/CRS issue or missing dependency.")
