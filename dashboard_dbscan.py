@@ -202,134 +202,151 @@ try:
             ax2.set_ylabel("Count")
             st.pyplot(fig2)
 
-    # -----------------------------
-    # Intensity -> parameters (tuned for ~2000 damaged)
-    # -----------------------------
-    intensity_params = {
-        "Low":    {"eps": 500, "min_samples": 25,  "buffer": 550},  # broad blobs
-        "Medium": {"eps": 300, "min_samples": 60,  "buffer": 350},
-        "High":   {"eps": 180, "min_samples": 140, "buffer": 250},  # tight/dense blobs
-    }
-    params = intensity_params[intensity]
+# -----------------------------
+# Intensity -> DBSCAN Params (more separated for 1388 damaged)
+# -----------------------------
+intensity_params = {
+    # Low: very permissive => big blobs, more clusters
+    "Low":    {"eps": 650, "min_samples": 15,  "buffer": 750},
 
-    hotspot_areas = None
-    debug = {"damaged_count": 0, "cluster_count": 0, "hotspot_polygon_count": 0}
+    # Medium: balanced
+    "Medium": {"eps": 350, "min_samples": 45,  "buffer": 450},
 
-    # -----------------------------
-    # Hotspot logic
-    # -----------------------------
-    if enable_hotspots:
-        # cache_key forces recompute when intensity changes (and when data size changes)
-        cache_key = f"{intensity}|eps={params['eps']}|min={params['min_samples']}|buf={params['buffer']}|rows={len(gdf)}"
+    # High: strict, but NOT zero => tighten a lot but still should yield something
+    "High":   {"eps": 220, "min_samples": 90,  "buffer": 275},
+}
+params = intensity_params[intensity]
 
-        gdf, hotspot_areas, debug = add_dbscan_hotspots_v2(
-            gdf,  # positional goes into _buildings_gdf (unhashed) [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data)
-            cache_key=cache_key,
-            damaged_col="prediction_class_num",
-            damaged_value=1,
-            eps_meters=float(params["eps"]),
-            min_samples=int(params["min_samples"]),
-            buffer_meters=float(params["buffer"]),
-        )
+hotspot_areas = None
+debug = {"damaged_count": 0, "cluster_count": 0, "hotspot_polygon_count": 0}
 
-        st.sidebar.caption(f"DBSCAN clusters found: {debug['cluster_count']}")
-        st.sidebar.caption(f"Hotspot polygons: {debug['hotspot_polygon_count']}")
+if enable_hotspots:
+    cache_key = f"{intensity}|eps={params['eps']}|min={params['min_samples']}|buf={params['buffer']}|rows={len(gdf)}"
 
-        st.markdown(
-            f"""
-            <div style="margin-bottom:10px; font-weight:bold;">DBSCAN Hotspot Legend</div>
-            <div style="margin-bottom:6px;">
-              <span style="font-weight:bold;">Intensity:</span> {intensity}
-              &nbsp;&nbsp;|&nbsp;&nbsp;
-              <span style="font-weight:bold;">eps:</span> {params["eps"]} m
-              &nbsp;&nbsp;|&nbsp;&nbsp;
-              <span style="font-weight:bold;">min_samples:</span> {params["min_samples"]}
-              &nbsp;&nbsp;|&nbsp;&nbsp;
-              <span style="font-weight:bold;">buffer:</span> {params["buffer"]} m
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        tooltip_html = (
-            "<b>Building ID:</b> {id}<br>"
-            "<b>Actual Label:</b> {label}<br>"
-            "<b>Prediction:</b> {prediction_class_num}<br>"
-            "<b>DBSCAN cluster:</b> {db_cluster}<br>"
-            "<b>In hotspot?:</b> {db_is_hotspot}"
-        )
-    else:
-        tooltip_html = (
-            "<b>Building ID:</b> {id}<br>"
-            "<b>Actual Label:</b> {label}<br>"
-            "<b>Prediction:</b> {prediction_class_num}"
-        )
-
-    # -----------------------------
-    # Colors for buildings
-    # -----------------------------
-    def fill_color(row):
-        return [255, 69, 0] if int(row["prediction_class_num"]) == 1 else [0, 255, 255]
-
-    gdf["fill_color"] = gdf.apply(fill_color, axis=1)
-
-    # -----------------------------
-    # Build layers
-    # -----------------------------
-    building_layer = pdk.Layer(
-        "GeoJsonLayer",
+    gdf, hotspot_areas, debug = add_dbscan_hotspots_v2(
         gdf,
-        opacity=0.9,
-        stroked=False,
+        cache_key=cache_key,
+        damaged_col="prediction_class_num",
+        damaged_value=1,
+        eps_meters=float(params["eps"]),
+        min_samples=int(params["min_samples"]),
+        buffer_meters=float(params["buffer"]),
+    )
+
+    st.sidebar.caption(f"DBSCAN clusters found: {debug['cluster_count']}")
+    st.sidebar.caption(f"Hotspot polygons: {debug['hotspot_polygon_count']}")
+
+# -----------------------------
+# Building colors (prediction)
+# -----------------------------
+gdf["fill_color"] = np.where(
+    gdf["prediction_class_num"].astype(int) == 1,
+    [[255, 69, 0, 220]] * len(gdf),   # damaged = orange-red
+    [[0, 255, 255, 220]] * len(gdf)   # undamaged = cyan
+)
+
+tooltip_html = (
+    "<b>Building ID:</b> {id}<br>"
+    "<b>Actual Label:</b> {label}<br>"
+    "<b>Prediction:</b> {prediction_class_num}<br>"
+    "<b>DBSCAN cluster:</b> {db_cluster}<br>"
+    "<b>In hotspot?:</b> {db_is_hotspot}"
+)
+
+# -----------------------------
+# Base building layer
+# -----------------------------
+building_layer = pdk.Layer(
+    "GeoJsonLayer",
+    gdf,
+    opacity=0.85,
+    stroked=False,
+    filled=True,
+    get_fill_color="fill_color",
+    pickable=True,
+)
+
+layers = [building_layer]
+
+# -----------------------------
+# Hotspot layers (TWO WAYS):
+#  1) Blob polygons (buffer+dissolve) as GeoJsonLayer
+#  2) Big circles at cluster centroids as ScatterplotLayer (very visible)
+# -----------------------------
+if enable_hotspots and hotspot_areas is not None and not hotspot_areas.empty:
+    # --- 1) Polygon blobs (make them VERY visible)
+    hotspot_geojson = json.loads(hotspot_areas.to_json())
+
+    hotspot_blob_layer = pdk.Layer(
+        "GeoJsonLayer",
+        hotspot_geojson,
+        opacity=0.60,                     # overall opacity
+        stroked=True,
         filled=True,
-        get_fill_color="fill_color",
+        # Fill + outline colors
+        get_fill_color=[255, 165, 0, 160],  # orange fill with alpha
+        get_line_color=[255, 120, 0, 255],  # darker orange outline
+        # IMPORTANT: proper line width configuration for deck.gl
+        get_line_width=1,                  # base width accessor (constant 1)
+        line_width_scale=8,                # multiply by 8
+        line_width_min_pixels=3,           # guarantee visibility on screen
         pickable=True,
     )
+    layers.append(hotspot_blob_layer)
 
-    layers = [building_layer]
+    # --- 2) Big circles (centroid + radius)
+    # Convert polygons to centroids for circles; make radius ~ buffer meters
+    # Ensure lat/lon for centroid coords
+    hotspot_ll = hotspot_areas.copy()
+    if hotspot_ll.crs is None:
+        hotspot_ll = hotspot_ll.set_crs(4326)
+    elif not hotspot_ll.crs.is_geographic:
+        hotspot_ll = hotspot_ll.to_crs(4326)
 
-    # Hotspot overlay blobs
-    if enable_hotspots and hotspot_areas is not None and not hotspot_areas.empty:
-        hotspot_geojson = json.loads(hotspot_areas.to_json())
+    hotspot_ll["centroid"] = hotspot_ll.geometry.centroid
+    hotspot_ll["lon"] = hotspot_ll["centroid"].x
+    hotspot_ll["lat"] = hotspot_ll["centroid"].y
 
-        hotspot_layer = pdk.Layer(
-            "GeoJsonLayer",
-            hotspot_geojson,
-            opacity=0.95,
-            stroked=True,
-            filled=True,
-            get_fill_color=[255, 165, 0, 150],   # orange fill
-            get_line_color=[255, 140, 0, 255],   # orange outline
-            get_line_width=10,
-            line_width_min_pixels=2,             # make outline visible
-            line_width_scale=1,
-            pickable=True,
-        )
-        layers.append(hotspot_layer)
+    # Use buffer as radius (meters). ScatterplotLayer expects meters for radius in deck.gl
+    hotspot_ll["radius_m"] = float(params["buffer"])
 
-    # -----------------------------
-    # View state
-    # -----------------------------
-    gdf_ll = gdf
-    if gdf_ll.crs is None:
-        gdf_ll = gdf_ll.set_crs(4326)
-    if not gdf_ll.crs.is_geographic:
-        gdf_ll = gdf_ll.to_crs(4326)
-
-    view_state = pdk.ViewState(
-        latitude=float(gdf_ll.geometry.centroid.y.mean()),
-        longitude=float(gdf_ll.geometry.centroid.x.mean()),
-        zoom=14,
-        pitch=45,
+    circle_layer = pdk.Layer(
+        "ScatterplotLayer",
+        hotspot_ll,
+        get_position=["lon", "lat"],
+        get_radius="radius_m",
+        radius_units="meters",
+        stroked=True,
+        filled=False,                      # outline-only circles
+        get_line_color=[255, 255, 0, 255], # bright yellow outline so you can't miss it
+        line_width_min_pixels=3,
+        pickable=False,
     )
+    layers.append(circle_layer)
 
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=layers,
-            initial_view_state=view_state,
-            tooltip={"html": tooltip_html}
-        )
+# -----------------------------
+# View state
+# -----------------------------
+gdf_ll = gdf
+if gdf_ll.crs is None:
+    gdf_ll = gdf_ll.set_crs(4326)
+if not gdf_ll.crs.is_geographic:
+    gdf_ll = gdf_ll.to_crs(4326)
+
+view_state = pdk.ViewState(
+    latitude=float(gdf_ll.geometry.centroid.y.mean()),
+    longitude=float(gdf_ll.geometry.centroid.x.mean()),
+    zoom=14,
+    pitch=30,
+)
+
+st.pydeck_chart(
+    pdk.Deck(
+        layers=layers,
+        initial_view_state=view_state,
+        tooltip={"html": tooltip_html},
     )
+)
 
 except Exception as e:
     st.error(f"App error: {e}")
