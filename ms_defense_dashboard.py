@@ -51,7 +51,7 @@ def get_bq_client():
     return bigquery.Client()
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(show_spinner=True)
 def get_bq_data():
     client = get_bq_client()
     query = """
@@ -64,7 +64,7 @@ def get_bq_data():
 # -----------------------------
 # GI* HOTSPOT FUNCTION (SIMPLIFIED + STABLE)
 # -----------------------------
-@st.cache_data(show_spinner="Computing hotspots…", ttl=300)
+@st.cache_data(show_spinner="Computing hotspots…", ttl=0)
 def add_gistar_hotspots(_gdf, sensitivity):
 
     gdf = _gdf.copy()
