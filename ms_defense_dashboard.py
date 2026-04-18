@@ -55,7 +55,7 @@ def get_bq_client():
 def get_bq_data():
     client = get_bq_client()
     query = """
-        SELECT id, label, prediction_class, geometry
+        SELECT id, label, prediction_class, geometry, run_timestamp
         FROM `capstone-project-485905.capstone_model_results.v_latest_marshall`
     """
     return client.query(query).to_geodataframe()
