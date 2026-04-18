@@ -27,7 +27,11 @@ st.title("Marshall CO Wildfire: Building Damage Statuses")
 # -----------------------------
 st.sidebar.header("Cluster Hotspot Detection")
 enable_hotspots = st.sidebar.toggle("Show cluster hotspots", value=False)
-
+with st.sidebar.expander("What are cluster hotspots?"):
+    st.write(
+        "Cluster hotspots highlight statistically significant clusters of predicted damaged buildings "
+        "(Getis-Ord Gi*). This helps identify neighborhoods with concentrated predicted damage."
+    )
 
 # -----------------------------
 # BigQuery Connection
@@ -53,10 +57,10 @@ def get_bq_data():
 # GI* FUNCTION
 # -----------------------------
 @st.cache_data(show_spinner="Computing cluster hotspots…", ttl=300)
-def add_gistar_hotspots(gdf):
+def add_gistar_hotspots(_gdf):
 
+    gdf = _gdf.copy()
     k = 12
-    gdf = gdf.copy()
 
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
@@ -96,7 +100,7 @@ def add_gistar_hotspots(gdf):
 
 
 # -----------------------------
-# CREATE CONVEX HULLS
+# CONVEX HULLS
 # -----------------------------
 def create_hotspot_hulls(gdf):
 
@@ -105,7 +109,6 @@ def create_hotspot_hulls(gdf):
     if hotspots.empty:
         return None
 
-    # project for clustering
     hotspots_proj = hotspots.to_crs(hotspots.estimate_utm_crs())
 
     coords = np.array(list(zip(
@@ -113,7 +116,6 @@ def create_hotspot_hulls(gdf):
         hotspots_proj.geometry.centroid.y
     )))
 
-    # DBSCAN just for grouping nearby hotspots
     clustering = DBSCAN(eps=100, min_samples=5).fit(coords)
     hotspots_proj["cluster"] = clustering.labels_
 
@@ -173,8 +175,11 @@ try:
 
         gdf = add_gistar_hotspots(gdf)
 
-        # intensity bars
+        # -----------------------------
+        # INTENSITY BAR CHART
+        # -----------------------------
         st.subheader("Hotspot Intensity Distribution")
+
         intensity_counts = (
             gdf[gdf["gi_cat"] == "Hotspot"]["intensity"]
             .value_counts()
@@ -183,6 +188,8 @@ try:
 
         fig3, ax3 = plt.subplots()
         intensity_counts.plot(kind="bar", ax=ax3)
+        ax3.set_xlabel("Intensity Level")
+        ax3.set_ylabel("Number of Buildings")
         st.pyplot(fig3)
 
         # colors
@@ -191,9 +198,9 @@ try:
             "Coldspot": [0, 0, 255],
             "Not significant": [200, 200, 200]
         }
+
         gdf["fill_color"] = gdf["gi_cat"].map(colors)
 
-        # base layer
         layers.append(
             pdk.Layer(
                 "GeoJsonLayer",
@@ -204,7 +211,7 @@ try:
         )
 
         # -----------------------------
-        # ADD CONVEX HULL LAYER
+        # CONVEX HULL LAYER
         # -----------------------------
         hulls_gdf = create_hotspot_hulls(gdf)
 
@@ -213,7 +220,7 @@ try:
                 pdk.Layer(
                     "GeoJsonLayer",
                     hulls_gdf,
-                    get_fill_color=[255, 0, 0, 80],  # transparent red
+                    get_fill_color=[255, 0, 0, 80],
                     get_line_color=[255, 0, 0],
                     line_width_min_pixels=2,
                     pickable=False,
@@ -231,10 +238,11 @@ try:
                 pickable=True,
             )
         )
+
         tooltip_html = "<b>ID:</b> {id}<br><b>Prediction:</b> {prediction_class}"
 
     # -----------------------------
-    # MAP VIEW
+    # MAP
     # -----------------------------
     gdf = gdf.to_crs(4326)
 
