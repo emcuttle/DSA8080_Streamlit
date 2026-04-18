@@ -51,7 +51,7 @@ def get_bq_client():
     return bigquery.Client()
 
 
-@st.cache_data(show_spinner=True)
+@st.cache_data(ttl=0)
 def get_bq_data():
     client = get_bq_client()
     query = """
