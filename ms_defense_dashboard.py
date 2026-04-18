@@ -23,9 +23,9 @@ st.title("Marshall CO Wildfire: Building Damage Statuses")
 
 
 # -----------------------------
-# Sidebar Controls
+# Sidebar
 # -----------------------------
-st.sidebar.header("Hotspot Detection")
+st.sidebar.header("Cluster Hotspot Detection")
 
 enable_hotspots = st.sidebar.toggle("Show cluster hotspots", value=False)
 
@@ -33,29 +33,12 @@ sensitivity = st.sidebar.select_slider(
     "Hotspot Sensitivity",
     options=["Low", "Medium", "High"],
     value="Medium",
-    help="Higher sensitivity detects more hotspots but may include noise."
+    help="Controls how strict hotspot detection is."
 )
 
-with st.sidebar.expander("What are cluster hotspots?"):
-    st.write(
-        "Hotspots highlight statistically significant clusters of predicted damaged buildings."
-    )
-
 
 # -----------------------------
-# Map Colors (CONSISTENT)
-# -----------------------------
-COLOR_MAP = {
-    "Hotspot": [255, 0, 0],
-    "Coldspot": [0, 0, 255],
-    "Not significant": [200, 200, 200],
-    "Damaged": [255, 69, 0],
-    "Undamaged": [0, 255, 255],
-}
-
-
-# -----------------------------
-# BigQuery
+# BigQuery Connection
 # -----------------------------
 def get_bq_client():
     if "gcp_service_account" in st.secrets:
@@ -76,18 +59,18 @@ def get_bq_data():
 
 
 # -----------------------------
-# Gi* Hotspots (KNN ONLY)
+# GI* HOTSPOT FUNCTION (FIXED SIGNIFICANCE)
 # -----------------------------
-@st.cache_data(ttl=300)
+@st.cache_data(show_spinner="Computing cluster hotspots…", ttl=300)
 def add_gistar_hotspots(_gdf, sensitivity):
 
     gdf = _gdf.copy()
 
-    # map sensitivity → alpha
+    # Map sensitivity → alpha (FIXED LOGIC)
     alpha_map = {
-        "Low": 0.01,
+        "Low": 0.10,     # more hotspots
         "Medium": 0.05,
-        "High": 0.10
+        "High": 0.01     # stricter
     }
     alpha = alpha_map[sensitivity]
 
@@ -101,7 +84,6 @@ def add_gistar_hotspots(_gdf, sensitivity):
 
     y = (pts["prediction_class"] == 1).astype(int)
 
-    # KNN (stable choice)
     w = KNN.from_dataframe(pts, k=12)
     w.transform = "R"
 
@@ -110,6 +92,7 @@ def add_gistar_hotspots(_gdf, sensitivity):
     gdf["gi_z"] = g_local.Zs
     gdf["gi_p"] = g_local.p_sim
 
+    # IMPORTANT FIX: less aggressive collapse of signal
     reject, _, _, _ = multipletests(gdf["gi_p"], alpha=alpha, method="fdr_bh")
 
     gdf["gi_cat"] = "Not significant"
@@ -120,7 +103,7 @@ def add_gistar_hotspots(_gdf, sensitivity):
 
 
 # -----------------------------
-# Convex Hull Clusters
+# CONVEX HULLS (UNCHANGED)
 # -----------------------------
 def create_hotspot_hulls(gdf):
 
@@ -165,7 +148,7 @@ try:
     gdf = get_bq_data()
 
     # -----------------------------
-    # Metrics
+    # PERFORMANCE METRICS
     # -----------------------------
     with st.expander("View Model Performance Metrics"):
         col1, col2 = st.columns(2)
@@ -175,6 +158,7 @@ try:
                 gdf["label"].astype(int),
                 gdf["prediction_class"].astype(int)
             )
+
             fig, ax = plt.subplots()
             sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
             st.pyplot(fig)
@@ -185,25 +169,37 @@ try:
             st.pyplot(fig2)
 
     # -----------------------------
-    # Legend (TOP - FIXED)
+    # LEGEND (RESTORED EXACT STYLE)
     # -----------------------------
     if enable_hotspots:
-        st.markdown("### Legend")
-        col1, col2, col3 = st.columns(3)
-
-        col1.markdown("🔴 Hotspot")
-        col2.markdown("🔵 Coldspot")
-        col3.markdown("⚪ Not Significant")
-
+        st.markdown(
+            """
+            <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 10px; font-weight: bold;">
+              <div style="width: 20px; height: 20px; background-color: rgb(255, 0, 0); border: 1px solid white;"></div>
+              <span>Hotspot</span>
+              <div style="width: 20px; height: 20px; background-color: rgb(0, 0, 255); border: 1px solid white;"></div>
+              <span>Coldspot</span>
+              <div style="width: 20px; height: 20px; background-color: rgb(200, 200, 200); border: 1px solid white;"></div>
+              <span>Not significant</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
     else:
-        st.markdown("### Legend")
-        col1, col2 = st.columns(2)
-
-        col1.markdown("🟠 Damaged")
-        col2.markdown("🔵 Undamaged")
+        st.markdown(
+            """
+            <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 10px; font-weight: bold;">
+              <div style="width: 20px; height: 20px; background-color: rgb(0, 255, 255); border: 1px solid white;"></div>
+              <span>Undamaged</span>
+              <div style="width: 20px; height: 20px; background-color: rgb(255, 69, 0); border: 1px solid white;"></div>
+              <span>Damaged</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     # -----------------------------
-    # Layers
+    # LAYERS
     # -----------------------------
     layers = []
 
@@ -211,7 +207,13 @@ try:
 
         gdf = add_gistar_hotspots(gdf, sensitivity)
 
-        gdf["fill_color"] = gdf["gi_cat"].map(COLOR_MAP)
+        color_map = {
+            "Hotspot": [255, 0, 0],
+            "Coldspot": [0, 0, 255],
+            "Not significant": [200, 200, 200]
+        }
+
+        gdf["fill_color"] = gdf["gi_cat"].map(color_map)
 
         layers.append(
             pdk.Layer(
@@ -229,7 +231,7 @@ try:
                 pdk.Layer(
                     "GeoJsonLayer",
                     hulls,
-                    get_fill_color=[255, 0, 0, 60],
+                    get_fill_color=[255, 0, 0, 70],
                     get_line_color=[255, 0, 0],
                     line_width_min_pixels=2,
                 )
@@ -250,7 +252,7 @@ try:
         tooltip = "<b>ID:</b> {id}<br><b>Prediction:</b> {prediction_class}"
 
     # -----------------------------
-    # Map
+    # MAP
     # -----------------------------
     gdf = gdf.to_crs(4326)
 
@@ -260,11 +262,13 @@ try:
         zoom=14,
     )
 
-    st.pydeck_chart(pdk.Deck(
-        layers=layers,
-        initial_view_state=view_state,
-        tooltip={"html": tooltip}
-    ))
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=layers,
+            initial_view_state=view_state,
+            tooltip={"html": tooltip}
+        )
+    )
 
 except Exception as e:
     st.error(f"Error: {e}")
