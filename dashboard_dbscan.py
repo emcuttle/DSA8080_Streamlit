@@ -223,3 +223,8 @@ st.pydeck_chart(
         tooltip={"text": "ID: {id}\nLabel: {label}\nPred: {prediction_class}"}
     )
 )
+
+
+st.write("Unique DBSCAN labels:", np.unique(gdf["db_cluster"]))
+st.write("Cluster count:", len(set(gdf["db_cluster"])) - (1 if -1 in gdf["db_cluster"] else 0))
+st.write("Clustered points:", (gdf["db_cluster"] != -1).sum())
