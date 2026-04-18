@@ -16,69 +16,55 @@ from statsmodels.stats.multitest import multipletests
 
 
 # -----------------------------
-# Title
+# Dashboard title
 # -----------------------------
 st.title("Marshall CO Wildfire: Building Damage Statuses")
 
 
 # -----------------------------
-# Sidebar Controls
+# Hotspot Toggle
 # -----------------------------
 st.sidebar.header("Cluster Hotspot Detection")
-
 enable_hotspots = st.sidebar.toggle("Show cluster hotspots", value=False)
-
-sensitivity = st.sidebar.select_slider(
-    "Hotspot Sensitivity",
-    options=["Low", "Medium", "High"],
-    value="Medium"
-)
 
 with st.sidebar.expander("What are cluster hotspots?"):
     st.write(
-        "Hotspots are statistically significant clusters of predicted damage using Getis-Ord Gi*."
+        "Cluster hotspots highlight statistically significant clusters of predicted damaged buildings "
+        "(Getis-Ord Gi*). This helps identify neighborhoods with concentrated predicted damage."
     )
 
 
 # -----------------------------
-# BigQuery
+# BigQuery Connection
 # -----------------------------
 def get_bq_client():
     if "gcp_service_account" in st.secrets:
-        return bigquery.Client.from_service_account_info(
-            st.secrets["gcp_service_account"]
-        )
+        creds_info = st.secrets["gcp_service_account"]
+        return bigquery.Client.from_service_account_info(creds_info)
     return bigquery.Client()
 
 
-@st.cache_data(ttl=0)
+@st.cache_data(ttl=300)
 def get_bq_data():
     client = get_bq_client()
     query = """
-        SELECT id, label, prediction_class, geometry, run_timestamp
-        FROM `capstone-project-485905.capstone_model_results.v_latest_marshall`
+        SELECT id, label, prediction_class, geometry
+        FROM `capstone-project-485905.marshall_v9_seed_75.v_inference_results_geo`
     """
     return client.query(query).to_geodataframe()
 
 
 # -----------------------------
-# GI* HOTSPOT FUNCTION (SIMPLIFIED + STABLE)
+# GI* Hotspot Function
 # -----------------------------
-@st.cache_data(show_spinner="Computing hotspots…", ttl=0)
-def add_gistar_hotspots(_gdf, sensitivity):
+@st.cache_data(show_spinner="Computing cluster hotspots…", ttl=300)
+def add_gistar_hotspots(_gdf):
 
     gdf = _gdf.copy()
 
-    # FIXED alpha (prevents instability)
-    alpha = 0.05
-
-    # ONLY sensitivity driver = k
-    k_map = {
-        "Low": 8,
-        "Medium": 12,
-        "High": 18
-    }
-    k = k_map[sensitivity]
+    k = 12
+    alpha = 0.01
+    permutations = 199
 
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
@@ -94,136 +80,163 @@ def add_gistar_hotspots(_gdf, sensitivity):
     w = KNN.from_dataframe(pts, k=k)
     w.transform = "R"
 
-    g_local = G_Local(y, w, permutations=199, star=True)
+    g_local = G_Local(y, w, permutations=permutations, star=True)
 
     gdf["gi_z"] = g_local.Zs
     gdf["gi_p"] = g_local.p_sim
 
-    reject, _, _, _ = multipletests(gdf["gi_p"], alpha=alpha, method="fdr_bh")
+    reject, pvals_fdr, _, _ = multipletests(
+        gdf["gi_p"], alpha=alpha, method="fdr_bh"
+    )
+
+    gdf["gi_sig"] = reject
 
     gdf["gi_cat"] = "Not significant"
-    gdf.loc[reject & (gdf["gi_z"] > 0), "gi_cat"] = "Hotspot"
-    gdf.loc[reject & (gdf["gi_z"] < 0), "gi_cat"] = "Coldspot"
+    gdf.loc[gdf["gi_sig"] & (gdf["gi_z"] > 0), "gi_cat"] = "Hotspot"
+    gdf.loc[gdf["gi_sig"] & (gdf["gi_z"] < 0), "gi_cat"] = "Coldspot"
 
     return gdf
 
 
 # -----------------------------
-# MAIN
+# MAIN APP
 # -----------------------------
 try:
     gdf = get_bq_data()
 
+    # =========================================================
+    # 🔒 CRITICAL FIX: MATCH COLAB EXACTLY
+    # =========================================================
+
+    gdf = gdf.sort_values("id").reset_index(drop=True)
+
+    gdf["label"] = gdf["label"].astype(int)
+    gdf["prediction_class"] = gdf["prediction_class"].astype(int)
+
+    # Single source of truth (matches Colab merged_df_eroded)
+    df_eval = gdf.copy()
+
+
     # -----------------------------
-    # METRICS
+    # Model Performance
     # -----------------------------
     with st.expander("View Model Performance Metrics"):
         col1, col2 = st.columns(2)
 
         with col1:
-            cm = confusion_matrix(
-                gdf["label"].astype(int),
-                gdf["prediction_class"].astype(int)
+            st.write("Confusion Matrix")
+
+            y_true = df_eval["label"]
+            y_pred = df_eval["prediction_class"]
+
+            cm = confusion_matrix(y_true, y_pred)
+
+            fig, ax = plt.subplots(figsize=(4, 3))
+            sns.heatmap(
+                cm,
+                annot=True,
+                fmt="d",
+                cmap="Blues",
+                ax=ax,
+                xticklabels=["Undamaged", "Damaged"],
+                yticklabels=["Undamaged", "Damaged"]
             )
-            fig, ax = plt.subplots()
-            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
+            ax.set_ylabel("Actual")
+            ax.set_xlabel("Predicted")
+
             st.pyplot(fig)
 
+
         with col2:
-            fig2, ax2 = plt.subplots()
-            sns.countplot(x=gdf["prediction_class"].astype(int), ax=ax2)
+            st.write("Prediction Distribution")
+
+            fig2, ax2 = plt.subplots(figsize=(4, 3))
+
+            sns.countplot(
+                x=df_eval["prediction_class"],
+                ax=ax2,
+                palette=["#00FFFF", "#FF4500"],
+                order=[0, 1]
+            )
+
+            ax2.set_xticklabels(["Undamaged", "Damaged"])
+            ax2.set_xlabel("Status")
+            ax2.set_ylabel("Count")
+
             st.pyplot(fig2)
 
+
     # -----------------------------
-    # LEGEND (UNCHANGED — EXACT VERSION YOU WANTED)
+    # HOTSPOTS
     # -----------------------------
     if enable_hotspots:
-        st.markdown(
-            """
-            <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 10px; font-weight: bold;">
-              <div style="width: 20px; height: 20px; background-color: rgb(255, 0, 0); border: 1px solid white;"></div>
-              <span>Hotspot</span>
-              <div style="width: 20px; height: 20px; background-color: rgb(0, 0, 255); border: 1px solid white;"></div>
-              <span>Coldspot</span>
-              <div style="width: 20px; height: 20px; background-color: rgb(200, 200, 200); border: 1px solid white;"></div>
-              <span>Not significant</span>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    else:
-        st.markdown(
-            """
-            <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 10px; font-weight: bold;">
-              <div style="width: 20px; height: 20px; background-color: rgb(0, 255, 255); border: 1px solid white;"></div>
-              <span>Undamaged</span>
-              <div style="width: 20px; height: 20px; background-color: rgb(255, 69, 0); border: 1px solid white;"></div>
-              <span>Damaged</span>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        df_eval = add_gistar_hotspots(df_eval)
 
-    # -----------------------------
-    # MAP
-    # -----------------------------
-    layers = []
-
-    if enable_hotspots:
-
-        gdf = add_gistar_hotspots(gdf, sensitivity)
-
-        color_map = {
-            "Hotspot": [255, 0, 0],
-            "Coldspot": [0, 0, 255],
-            "Not significant": [200, 200, 200]
+        hotspot_colors = {
+            "Hotspot": [255, 0, 0, 200],
+            "Coldspot": [0, 0, 255, 200],
+            "Not significant": [200, 200, 200, 200],
         }
 
-        gdf["fill_color"] = gdf["gi_cat"].map(color_map)
-
-        layers.append(
-            pdk.Layer(
-                "GeoJsonLayer",
-                gdf,
-                get_fill_color="fill_color",
-                pickable=True,
-            )
+        df_eval["fill_color"] = df_eval["gi_cat"].map(hotspot_colors)
+        df_eval["fill_color"] = df_eval["fill_color"].apply(
+            lambda x: x if isinstance(x, list) else [200, 200, 200, 200]
         )
 
-        tooltip = "<b>ID:</b> {id}<br><b>Z:</b> {gi_z}"
+        tooltip_html = """
+        <b>ID:</b> {id}<br>
+        <b>Actual:</b> {label}<br>
+        <b>Prediction:</b> {prediction_class}<br>
+        <b>Z-score:</b> {gi_z}<br>
+        <b>Category:</b> {gi_cat}
+        """
 
     else:
-        layers.append(
-            pdk.Layer(
-                "GeoJsonLayer",
-                gdf,
-                get_fill_color="prediction_class == 1 ? [255,69,0] : [0,255,255]",
-                pickable=True,
-            )
-        )
+        df_eval["fill_color"] = np.where(
+            df_eval["prediction_class"] == 1,
+            [255, 69, 0, 220],
+            [0, 255, 255, 220]
+        ).tolist()
 
-        tooltip = "<b>ID:</b> {id}<br><b>Prediction:</b> {prediction_class}"
+        tooltip_html = """
+        <b>ID:</b> {id}<br>
+        <b>Actual:</b> {label}<br>
+        <b>Prediction:</b> {prediction_class}
+        """
+
 
     # -----------------------------
-    # VIEW
+    # MAP (Colab-aligned data)
     # -----------------------------
-    gdf = gdf.to_crs(4326)
+    df_map = df_eval.copy()
+
+    df_map = df_map.to_crs(4326)
+
+    layer = pdk.Layer(
+        "GeoJsonLayer",
+        df_map,
+        opacity=0.9,
+        stroked=False,
+        filled=True,
+        get_fill_color="fill_color",
+        pickable=True,
+    )
 
     view_state = pdk.ViewState(
-        latitude=gdf.geometry.centroid.y.mean(),
-        longitude=gdf.geometry.centroid.x.mean(),
+        latitude=float(df_map.geometry.centroid.y.mean()),
+        longitude=float(df_map.geometry.centroid.x.mean()),
         zoom=14,
+        pitch=45,
     )
 
     st.pydeck_chart(
         pdk.Deck(
-            layers=layers,
+            layers=[layer],
             initial_view_state=view_state,
-            tooltip={"html": tooltip}
+            tooltip={"html": tooltip_html},
         )
     )
 
+
 except Exception as e:
     st.error(f"Error: {e}")
-
-st.write("MAX run_timestamp in Streamlit:", gdf["run_timestamp"].max())
