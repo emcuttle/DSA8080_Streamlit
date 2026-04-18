@@ -17,13 +17,13 @@ from sklearn.cluster import DBSCAN
 
 
 # -----------------------------
-# Dashboard title
+# Title
 # -----------------------------
 st.title("Marshall CO Wildfire: Building Damage Statuses")
 
 
 # -----------------------------
-# Sidebar
+# Sidebar Controls
 # -----------------------------
 st.sidebar.header("Cluster Hotspot Detection")
 
@@ -32,13 +32,17 @@ enable_hotspots = st.sidebar.toggle("Show cluster hotspots", value=False)
 sensitivity = st.sidebar.select_slider(
     "Hotspot Sensitivity",
     options=["Low", "Medium", "High"],
-    value="Medium",
-    help="Controls how strict hotspot detection is."
+    value="Medium"
 )
+
+with st.sidebar.expander("What are cluster hotspots?"):
+    st.write(
+        "Hotspots are statistically significant clusters of predicted damage using Getis-Ord Gi*."
+    )
 
 
 # -----------------------------
-# BigQuery Connection
+# BigQuery
 # -----------------------------
 def get_bq_client():
     if "gcp_service_account" in st.secrets:
@@ -59,20 +63,24 @@ def get_bq_data():
 
 
 # -----------------------------
-# GI* HOTSPOT FUNCTION (FIXED SIGNIFICANCE)
+# GI* HOTSPOT FUNCTION (STABLE + SENSITIVITY FIXED)
 # -----------------------------
-@st.cache_data(show_spinner="Computing cluster hotspots…", ttl=300)
+@st.cache_data(show_spinner="Computing hotspots…", ttl=300)
 def add_gistar_hotspots(_gdf, sensitivity):
 
     gdf = _gdf.copy()
 
-    # Map sensitivity → alpha (FIXED LOGIC)
-    alpha_map = {
-        "Low": 0.10,     # more hotspots
-        "Medium": 0.05,
-        "High": 0.01     # stricter
+    # -----------------------------
+    # FIXED: Sensitivity affects alpha + mild smoothing only
+    # -----------------------------
+    config = {
+        "Low":    {"alpha": 0.10, "k": 10},
+        "Medium": {"alpha": 0.05, "k": 12},
+        "High":   {"alpha": 0.01, "k": 14}
     }
-    alpha = alpha_map[sensitivity]
+
+    alpha = config[sensitivity]["alpha"]
+    k = config[sensitivity]["k"]
 
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
@@ -82,9 +90,10 @@ def add_gistar_hotspots(_gdf, sensitivity):
     pts = gdf_proj.copy()
     pts["geometry"] = pts.geometry.centroid
 
-    y = (pts["prediction_class"] == 1).astype(int)
+    y = pd.to_numeric(pts["prediction_class"], errors="coerce").fillna(0).astype(int)
+    y = (y == 1).astype(int)
 
-    w = KNN.from_dataframe(pts, k=12)
+    w = KNN.from_dataframe(pts, k=k)
     w.transform = "R"
 
     g_local = G_Local(y, w, permutations=199, star=True)
@@ -92,7 +101,9 @@ def add_gistar_hotspots(_gdf, sensitivity):
     gdf["gi_z"] = g_local.Zs
     gdf["gi_p"] = g_local.p_sim
 
-    # IMPORTANT FIX: less aggressive collapse of signal
+    # -----------------------------
+    # FIXED: stable FDR behavior
+    # -----------------------------
     reject, _, _, _ = multipletests(gdf["gi_p"], alpha=alpha, method="fdr_bh")
 
     gdf["gi_cat"] = "Not significant"
@@ -103,7 +114,7 @@ def add_gistar_hotspots(_gdf, sensitivity):
 
 
 # -----------------------------
-# CONVEX HULLS (UNCHANGED)
+# Convex Hulls
 # -----------------------------
 def create_hotspot_hulls(gdf):
 
@@ -148,7 +159,7 @@ try:
     gdf = get_bq_data()
 
     # -----------------------------
-    # PERFORMANCE METRICS
+    # Metrics
     # -----------------------------
     with st.expander("View Model Performance Metrics"):
         col1, col2 = st.columns(2)
@@ -158,7 +169,6 @@ try:
                 gdf["label"].astype(int),
                 gdf["prediction_class"].astype(int)
             )
-
             fig, ax = plt.subplots()
             sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
             st.pyplot(fig)
@@ -169,7 +179,7 @@ try:
             st.pyplot(fig2)
 
     # -----------------------------
-    # LEGEND (RESTORED EXACT STYLE)
+    # LEGEND (UNCHANGED - EXACT STYLE PRESERVED)
     # -----------------------------
     if enable_hotspots:
         st.markdown(
@@ -199,7 +209,7 @@ try:
         )
 
     # -----------------------------
-    # LAYERS
+    # MAP
     # -----------------------------
     layers = []
 
@@ -251,9 +261,6 @@ try:
 
         tooltip = "<b>ID:</b> {id}<br><b>Prediction:</b> {prediction_class}"
 
-    # -----------------------------
-    # MAP
-    # -----------------------------
     gdf = gdf.to_crs(4326)
 
     view_state = pdk.ViewState(
