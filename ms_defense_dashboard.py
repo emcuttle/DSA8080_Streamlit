@@ -13,7 +13,6 @@ import geopandas as gpd
 from esda import G_Local
 from libpysal.weights import KNN
 from statsmodels.stats.multitest import multipletests
-from sklearn.cluster import DBSCAN
 
 
 # -----------------------------
@@ -63,24 +62,23 @@ def get_bq_data():
 
 
 # -----------------------------
-# GI* HOTSPOT FUNCTION (STABLE + SENSITIVITY FIXED)
+# GI* HOTSPOT FUNCTION (SIMPLIFIED + STABLE)
 # -----------------------------
 @st.cache_data(show_spinner="Computing hotspots…", ttl=300)
 def add_gistar_hotspots(_gdf, sensitivity):
 
     gdf = _gdf.copy()
 
-    # -----------------------------
-    # FIXED: Sensitivity affects alpha + mild smoothing only
-    # -----------------------------
-    config = {
-        "Low":    {"alpha": 0.10, "k": 10},
-        "Medium": {"alpha": 0.05, "k": 12},
-        "High":   {"alpha": 0.01, "k": 14}
-    }
+    # FIXED alpha (prevents instability)
+    alpha = 0.05
 
-    alpha = config[sensitivity]["alpha"]
-    k = config[sensitivity]["k"]
+    # ONLY sensitivity driver = k
+    k_map = {
+        "Low": 8,
+        "Medium": 12,
+        "High": 18
+    }
+    k = k_map[sensitivity]
 
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
@@ -101,9 +99,6 @@ def add_gistar_hotspots(_gdf, sensitivity):
     gdf["gi_z"] = g_local.Zs
     gdf["gi_p"] = g_local.p_sim
 
-    # -----------------------------
-    # FIXED: stable FDR behavior
-    # -----------------------------
     reject, _, _, _ = multipletests(gdf["gi_p"], alpha=alpha, method="fdr_bh")
 
     gdf["gi_cat"] = "Not significant"
@@ -114,52 +109,13 @@ def add_gistar_hotspots(_gdf, sensitivity):
 
 
 # -----------------------------
-# Convex Hulls
-# -----------------------------
-def create_hotspot_hulls(gdf):
-
-    hotspots = gdf[gdf["gi_cat"] == "Hotspot"].copy()
-
-    if hotspots.empty:
-        return None
-
-    hotspots_proj = hotspots.to_crs(hotspots.estimate_utm_crs())
-
-    coords = np.array(list(zip(
-        hotspots_proj.geometry.centroid.x,
-        hotspots_proj.geometry.centroid.y
-    )))
-
-    clustering = DBSCAN(eps=120, min_samples=4).fit(coords)
-    hotspots_proj["cluster"] = clustering.labels_
-
-    hulls = []
-
-    for cid in set(clustering.labels_):
-        if cid == -1:
-            continue
-
-        cluster_pts = hotspots_proj[hotspots_proj["cluster"] == cid]
-
-        if len(cluster_pts) < 3:
-            continue
-
-        hulls.append(cluster_pts.unary_union.convex_hull)
-
-    if not hulls:
-        return None
-
-    return gpd.GeoDataFrame(geometry=hulls, crs=hotspots_proj.crs).to_crs(4326)
-
-
-# -----------------------------
 # MAIN
 # -----------------------------
 try:
     gdf = get_bq_data()
 
     # -----------------------------
-    # Metrics
+    # METRICS
     # -----------------------------
     with st.expander("View Model Performance Metrics"):
         col1, col2 = st.columns(2)
@@ -179,7 +135,7 @@ try:
             st.pyplot(fig2)
 
     # -----------------------------
-    # LEGEND (UNCHANGED - EXACT STYLE PRESERVED)
+    # LEGEND (UNCHANGED — EXACT VERSION YOU WANTED)
     # -----------------------------
     if enable_hotspots:
         st.markdown(
@@ -234,19 +190,6 @@ try:
             )
         )
 
-        hulls = create_hotspot_hulls(gdf)
-
-        if hulls is not None:
-            layers.append(
-                pdk.Layer(
-                    "GeoJsonLayer",
-                    hulls,
-                    get_fill_color=[255, 0, 0, 70],
-                    get_line_color=[255, 0, 0],
-                    line_width_min_pixels=2,
-                )
-            )
-
         tooltip = "<b>ID:</b> {id}<br><b>Z:</b> {gi_z}"
 
     else:
@@ -261,6 +204,9 @@ try:
 
         tooltip = "<b>ID:</b> {id}<br><b>Prediction:</b> {prediction_class}"
 
+    # -----------------------------
+    # VIEW
+    # -----------------------------
     gdf = gdf.to_crs(4326)
 
     view_state = pdk.ViewState(
