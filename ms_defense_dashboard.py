@@ -225,3 +225,5 @@ try:
 
 except Exception as e:
     st.error(f"Error: {e}")
+
+st.write("MAX run_timestamp in Streamlit:", gdf["run_timestamp"].max())
