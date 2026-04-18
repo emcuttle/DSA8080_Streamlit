@@ -23,23 +23,45 @@ st.title("Marshall CO Wildfire: Building Damage Statuses")
 
 
 # -----------------------------
-# Sidebar Toggle
+# Sidebar Controls
 # -----------------------------
-st.sidebar.header("Cluster Hotspot Detection")
+st.sidebar.header("Hotspot Detection")
+
 enable_hotspots = st.sidebar.toggle("Show cluster hotspots", value=False)
+
+sensitivity = st.sidebar.select_slider(
+    "Hotspot Sensitivity",
+    options=["Low", "Medium", "High"],
+    value="Medium",
+    help="Higher sensitivity detects more hotspots but may include noise."
+)
+
 with st.sidebar.expander("What are cluster hotspots?"):
     st.write(
-        "Cluster hotspots highlight statistically significant clusters of predicted damaged buildings "
-        "(Getis-Ord Gi*). This helps identify neighborhoods with concentrated predicted damage."
+        "Hotspots highlight statistically significant clusters of predicted damaged buildings."
     )
 
+
 # -----------------------------
-# BigQuery Connection
+# Map Colors (CONSISTENT)
+# -----------------------------
+COLOR_MAP = {
+    "Hotspot": [255, 0, 0],
+    "Coldspot": [0, 0, 255],
+    "Not significant": [200, 200, 200],
+    "Damaged": [255, 69, 0],
+    "Undamaged": [0, 255, 255],
+}
+
+
+# -----------------------------
+# BigQuery
 # -----------------------------
 def get_bq_client():
     if "gcp_service_account" in st.secrets:
-        creds_info = st.secrets["gcp_service_account"]
-        return bigquery.Client.from_service_account_info(creds_info)
+        return bigquery.Client.from_service_account_info(
+            st.secrets["gcp_service_account"]
+        )
     return bigquery.Client()
 
 
@@ -54,13 +76,20 @@ def get_bq_data():
 
 
 # -----------------------------
-# GI* FUNCTION
+# Gi* Hotspots (KNN ONLY)
 # -----------------------------
-@st.cache_data(show_spinner="Computing cluster hotspots…", ttl=300)
-def add_gistar_hotspots(_gdf):
+@st.cache_data(ttl=300)
+def add_gistar_hotspots(_gdf, sensitivity):
 
     gdf = _gdf.copy()
-    k = 12
+
+    # map sensitivity → alpha
+    alpha_map = {
+        "Low": 0.01,
+        "Medium": 0.05,
+        "High": 0.10
+    }
+    alpha = alpha_map[sensitivity]
 
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
@@ -70,10 +99,10 @@ def add_gistar_hotspots(_gdf):
     pts = gdf_proj.copy()
     pts["geometry"] = pts.geometry.centroid
 
-    y = pd.to_numeric(pts["prediction_class"], errors="coerce").fillna(0).astype(int)
-    y = (y == 1).astype(int)
+    y = (pts["prediction_class"] == 1).astype(int)
 
-    w = KNN.from_dataframe(pts, k=k)
+    # KNN (stable choice)
+    w = KNN.from_dataframe(pts, k=12)
     w.transform = "R"
 
     g_local = G_Local(y, w, permutations=199, star=True)
@@ -81,26 +110,17 @@ def add_gistar_hotspots(_gdf):
     gdf["gi_z"] = g_local.Zs
     gdf["gi_p"] = g_local.p_sim
 
-    reject, pvals_fdr, _, _ = multipletests(gdf["gi_p"], alpha=0.01, method="fdr_bh")
-    gdf["gi_sig"] = reject
+    reject, _, _, _ = multipletests(gdf["gi_p"], alpha=alpha, method="fdr_bh")
 
     gdf["gi_cat"] = "Not significant"
-    gdf.loc[gdf["gi_sig"] & (gdf["gi_z"] > 0), "gi_cat"] = "Hotspot"
-    gdf.loc[gdf["gi_sig"] & (gdf["gi_z"] < 0), "gi_cat"] = "Coldspot"
-
-    # -----------------------------
-    # INTENSITY
-    # -----------------------------
-    gdf["intensity"] = "None"
-    gdf.loc[gdf["gi_z"] >= 2.58, "intensity"] = "High"
-    gdf.loc[(gdf["gi_z"] >= 1.96) & (gdf["gi_z"] < 2.58), "intensity"] = "Medium"
-    gdf.loc[(gdf["gi_z"] >= 1.65) & (gdf["gi_z"] < 1.96), "intensity"] = "Low"
+    gdf.loc[reject & (gdf["gi_z"] > 0), "gi_cat"] = "Hotspot"
+    gdf.loc[reject & (gdf["gi_z"] < 0), "gi_cat"] = "Coldspot"
 
     return gdf
 
 
 # -----------------------------
-# CONVEX HULLS
+# Convex Hull Clusters
 # -----------------------------
 def create_hotspot_hulls(gdf):
 
@@ -116,28 +136,26 @@ def create_hotspot_hulls(gdf):
         hotspots_proj.geometry.centroid.y
     )))
 
-    clustering = DBSCAN(eps=100, min_samples=5).fit(coords)
+    clustering = DBSCAN(eps=120, min_samples=4).fit(coords)
     hotspots_proj["cluster"] = clustering.labels_
 
     hulls = []
 
-    for cluster_id in set(clustering.labels_):
-        if cluster_id == -1:
+    for cid in set(clustering.labels_):
+        if cid == -1:
             continue
 
-        cluster_points = hotspots_proj[hotspots_proj["cluster"] == cluster_id]
+        cluster_pts = hotspots_proj[hotspots_proj["cluster"] == cid]
 
-        if len(cluster_points) < 3:
+        if len(cluster_pts) < 3:
             continue
 
-        hull = cluster_points.unary_union.convex_hull
-        hulls.append(hull)
+        hulls.append(cluster_pts.unary_union.convex_hull)
 
     if not hulls:
         return None
 
-    hulls_gdf = gpd.GeoDataFrame(geometry=hulls, crs=hotspots_proj.crs)
-    return hulls_gdf.to_crs(4326)
+    return gpd.GeoDataFrame(geometry=hulls, crs=hotspots_proj.crs).to_crs(4326)
 
 
 # -----------------------------
@@ -153,53 +171,47 @@ try:
         col1, col2 = st.columns(2)
 
         with col1:
-            y_true = gdf['label'].astype(int)
-            y_pred = gdf['prediction_class'].astype(int)
-            cm = confusion_matrix(y_true, y_pred)
-
+            cm = confusion_matrix(
+                gdf["label"].astype(int),
+                gdf["prediction_class"].astype(int)
+            )
             fig, ax = plt.subplots()
             sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
             st.pyplot(fig)
 
         with col2:
             fig2, ax2 = plt.subplots()
-            sns.countplot(x=gdf['prediction_class'].astype(int), ax=ax2)
+            sns.countplot(x=gdf["prediction_class"].astype(int), ax=ax2)
             st.pyplot(fig2)
 
     # -----------------------------
-    # HOTSPOTS
+    # Legend (TOP - FIXED)
+    # -----------------------------
+    if enable_hotspots:
+        st.markdown("### Legend")
+        col1, col2, col3 = st.columns(3)
+
+        col1.markdown("🔴 Hotspot")
+        col2.markdown("🔵 Coldspot")
+        col3.markdown("⚪ Not Significant")
+
+    else:
+        st.markdown("### Legend")
+        col1, col2 = st.columns(2)
+
+        col1.markdown("🟠 Damaged")
+        col2.markdown("🔵 Undamaged")
+
+    # -----------------------------
+    # Layers
     # -----------------------------
     layers = []
 
     if enable_hotspots:
 
-        gdf = add_gistar_hotspots(gdf)
+        gdf = add_gistar_hotspots(gdf, sensitivity)
 
-        # -----------------------------
-        # INTENSITY BAR CHART
-        # -----------------------------
-        st.subheader("Hotspot Intensity Distribution")
-
-        intensity_counts = (
-            gdf[gdf["gi_cat"] == "Hotspot"]["intensity"]
-            .value_counts()
-            .reindex(["High", "Medium", "Low"], fill_value=0)
-        )
-
-        fig3, ax3 = plt.subplots()
-        intensity_counts.plot(kind="bar", ax=ax3)
-        ax3.set_xlabel("Intensity Level")
-        ax3.set_ylabel("Number of Buildings")
-        st.pyplot(fig3)
-
-        # colors
-        colors = {
-            "Hotspot": [255, 0, 0],
-            "Coldspot": [0, 0, 255],
-            "Not significant": [200, 200, 200]
-        }
-
-        gdf["fill_color"] = gdf["gi_cat"].map(colors)
+        gdf["fill_color"] = gdf["gi_cat"].map(COLOR_MAP)
 
         layers.append(
             pdk.Layer(
@@ -210,24 +222,20 @@ try:
             )
         )
 
-        # -----------------------------
-        # CONVEX HULL LAYER
-        # -----------------------------
-        hulls_gdf = create_hotspot_hulls(gdf)
+        hulls = create_hotspot_hulls(gdf)
 
-        if hulls_gdf is not None:
+        if hulls is not None:
             layers.append(
                 pdk.Layer(
                     "GeoJsonLayer",
-                    hulls_gdf,
-                    get_fill_color=[255, 0, 0, 80],
+                    hulls,
+                    get_fill_color=[255, 0, 0, 60],
                     get_line_color=[255, 0, 0],
                     line_width_min_pixels=2,
-                    pickable=False,
                 )
             )
 
-        tooltip_html = "<b>ID:</b> {id}<br><b>Z:</b> {gi_z}<br><b>Intensity:</b> {intensity}"
+        tooltip = "<b>ID:</b> {id}<br><b>Z:</b> {gi_z}"
 
     else:
         layers.append(
@@ -239,10 +247,10 @@ try:
             )
         )
 
-        tooltip_html = "<b>ID:</b> {id}<br><b>Prediction:</b> {prediction_class}"
+        tooltip = "<b>ID:</b> {id}<br><b>Prediction:</b> {prediction_class}"
 
     # -----------------------------
-    # MAP
+    # Map
     # -----------------------------
     gdf = gdf.to_crs(4326)
 
@@ -255,7 +263,7 @@ try:
     st.pydeck_chart(pdk.Deck(
         layers=layers,
         initial_view_state=view_state,
-        tooltip={"html": tooltip_html}
+        tooltip={"html": tooltip}
     ))
 
 except Exception as e:
