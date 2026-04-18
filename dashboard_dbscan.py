@@ -36,8 +36,8 @@ intensity = st.sidebar.select_slider(
 # -----------------------------
 def get_bq_client():
     if "gcp_service_account" in st.secrets:
-        creds_info = st.secrets["gcp_service_account"]
-        return bigquery.Client.from_service_account_info(creds_info)
+        creds = st.secrets["gcp_service_account"]
+        return bigquery.Client.from_service_account_info(creds)
     return bigquery.Client()
 
 @st.cache_data(ttl=300)
@@ -50,11 +50,12 @@ def get_bq_data():
     return client.query(query).to_geodataframe()
 
 # -----------------------------
-# DBSCAN FUNCTION
+# DBSCAN (FIXED CACHE ISSUE)
 # -----------------------------
-@st.cache_data(ttl=300)
-def run_dbscan(gdf, eps, min_samples, buffer_m):
-    df = gdf.copy()
+@st.cache_data(ttl=300, show_spinner="Computing DBSCAN hotspots…")
+def run_dbscan(_gdf, eps, min_samples, buffer_m):
+
+    df = _gdf.copy()
 
     if df.crs is None:
         df = df.set_crs(4326)
@@ -119,23 +120,51 @@ gdf["prediction_class"] = pd.to_numeric(
     gdf["prediction_class"], errors="coerce"
 ).fillna(0).astype(int)
 
+gdf["label"] = pd.to_numeric(
+    gdf["label"], errors="coerce"
+).fillna(0).astype(int)
+
 # -----------------------------
-# Performance Metrics
+# PERFORMANCE METRICS
 # -----------------------------
 with st.expander("Model Performance Metrics"):
-    y_true = pd.to_numeric(gdf["label"], errors="coerce").fillna(0).astype(int)
-    y_pred = gdf["prediction_class"]
 
-    cm = confusion_matrix(y_true, y_pred)
+    col1, col2 = st.columns(2)
 
-    fig, ax = plt.subplots()
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
-    st.pyplot(fig)
+    with col1:
+        st.write("Confusion Matrix")
 
-    st.caption("Confusion Matrix (Actual vs Predicted)")
+        cm = confusion_matrix(gdf["label"], gdf["prediction_class"])
+
+        fig, ax = plt.subplots()
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt="d",
+            cmap="Blues",
+            ax=ax,
+            xticklabels=["Undamaged", "Damaged"],
+            yticklabels=["Undamaged", "Damaged"]
+        )
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("Actual")
+        st.pyplot(fig)
+
+    with col2:
+        st.write("Prediction Distribution")
+
+        fig2, ax2 = plt.subplots()
+        sns.countplot(
+            x=gdf["prediction_class"],
+            ax=ax2,
+            palette=["#00CFFF", "#FF3B30"],
+            order=[0, 1]
+        )
+        ax2.set_xticklabels(["Undamaged", "Damaged"])
+        st.pyplot(fig2)
 
 # -----------------------------
-# Intensity settings
+# DBSCAN SETTINGS
 # -----------------------------
 params = {
     "Low": (650, 15, 750),
@@ -148,9 +177,6 @@ eps, min_s, buf = params[intensity]
 hotspot_polys = None
 circles = pd.DataFrame()
 
-# -----------------------------
-# RUN DBSCAN
-# -----------------------------
 if enable_hotspots:
     gdf, hotspot_polys, circles = run_dbscan(
         gdf,
@@ -159,42 +185,59 @@ if enable_hotspots:
         buffer_m=buf
     )
 
-    # -----------------------------
-    # CLUSTER SUMMARY BOX (NEW)
-    # -----------------------------
-    num_clusters = len(hotspot_polys) if hotspot_polys is not None else 0
-    num_hotpoints = int((gdf["db_cluster"] != -1).sum())
-
     st.sidebar.markdown("### Cluster Summary")
-    st.sidebar.metric("Clusters Found", num_clusters)
-    st.sidebar.metric("Buildings in Clusters", num_hotpoints)
-    st.sidebar.caption(f"eps={eps}, min_samples={min_s}, buffer={buf}")
+    st.sidebar.metric("Clusters Found", len(hotspot_polys))
+    st.sidebar.metric("Buildings in Clusters", int((gdf["db_cluster"] != -1).sum()))
 
 # -----------------------------
-# Colors
+# COLOR MAPPING (MATCHES LEGEND EXACTLY)
 # -----------------------------
 gdf["fill_color"] = [
-    [255, 69, 0, 220] if x == 1 else [0, 255, 255, 220]
+    [0, 195, 255, 220] if x == 0 else [255, 59, 48, 220]
     for x in gdf["prediction_class"]
 ]
 
 # -----------------------------
-# Layers (IMPORTANT FIX)
+# LEGEND (GI*-STYLE - ABOVE MAP)
+# -----------------------------
+st.markdown("""
+<div style="display: flex; gap: 25px; align-items: center; margin-bottom: 10px; font-weight: bold;">
+
+  <div style="display:flex; align-items:center; gap:6px;">
+    <div style="width: 14px; height: 14px; background-color: rgb(0,195,255); border-radius: 50%;"></div>
+    Undamaged
+  </div>
+
+  <div style="display:flex; align-items:center; gap:6px;">
+    <div style="width: 14px; height: 14px; background-color: rgb(255,59,48); border-radius: 50%;"></div>
+    Damaged
+  </div>
+
+  <div style="display:flex; align-items:center; gap:6px;">
+    <div style="width: 14px; height: 14px; background-color: orange; border-radius: 50%;"></div>
+    DBSCAN clusters
+  </div>
+
+</div>
+""", unsafe_allow_html=True)
+
+# -----------------------------
+# LAYERS
 # -----------------------------
 layers = []
 
-# Buildings
+# buildings
 layers.append(
     pdk.Layer(
         "GeoJsonLayer",
         gdf,
-        get_fill_color="fill_color",
         opacity=0.85,
+        get_fill_color="fill_color",
         pickable=True
     )
 )
 
-# Cluster polygons
+# cluster polygons
 if enable_hotspots and hotspot_polys is not None and not hotspot_polys.empty:
     layers.append(
         pdk.Layer(
@@ -203,11 +246,11 @@ if enable_hotspots and hotspot_polys is not None and not hotspot_polys.empty:
             filled=True,
             stroked=True,
             get_fill_color=[255, 140, 0, 120],
-            get_line_color=[255, 80, 0, 255],
+            get_line_color=[255, 90, 0, 255],
         )
     )
 
-# Cluster circles
+# cluster circles (IMPORTANT VISUAL FIX)
 if enable_hotspots and not circles.empty:
     layers.append(
         pdk.Layer(
@@ -218,14 +261,14 @@ if enable_hotspots and not circles.empty:
             radius_units="meters",
             filled=True,
             stroked=True,
-            get_fill_color=[255, 165, 0, 90],
-            get_line_color=[255, 140, 0, 255],
+            get_fill_color=[255, 140, 0, 90],
+            get_line_color=[255, 90, 0, 255],
             line_width_min_pixels=3,
         )
     )
 
 # -----------------------------
-# View
+# VIEW
 # -----------------------------
 cent = gdf.geometry.centroid
 
@@ -243,14 +286,3 @@ st.pydeck_chart(
         tooltip={"text": "ID: {id}\nLabel: {label}\nPred: {prediction_class}"}
     )
 )
-
-# -----------------------------
-# Legend
-# -----------------------------
-st.markdown("""
-### Legend
-- 🔵 Cyan = Undamaged  
-- 🔴 Red = Damaged  
-- 🟠 Orange fill = DBSCAN clusters  
-- 🟡 Orange rings = cluster boundaries  
-""")
