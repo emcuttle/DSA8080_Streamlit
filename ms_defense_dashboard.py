@@ -228,6 +228,8 @@ try:
         latitude=gdf.geometry.centroid.y.mean(),
         longitude=gdf.geometry.centroid.x.mean(),
         zoom=14,
+        pitch=45,
+        bearing=20
     )
 
     st.pydeck_chart(
