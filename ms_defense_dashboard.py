@@ -121,17 +121,32 @@ try:
         col1, col2 = st.columns(2)
 
         with col1:
-            cm = confusion_matrix(
-                gdf["label"].astype(int),
-                gdf["prediction_class"].astype(int)
-            )
-            fig, ax = plt.subplots()
-            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
+            st.write("Confusion Matrix")
+            y_true = gdf['label'].astype(str).str.strip().astype(int)
+            y_pred = gdf['prediction_class'].astype(str).str.strip().astype(int)
+            cm = confusion_matrix(y_true, y_pred)
+            fig, ax = plt.subplots(figsize=(4, 3))
+            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax,
+                        xticklabels=["Undamaged", "Damaged"],
+                        yticklabels=["Undamaged", "Damaged"])
+            plt.ylabel('Actual')
+            plt.xlabel('Predicted')
             st.pyplot(fig)
 
         with col2:
-            fig2, ax2 = plt.subplots()
-            sns.countplot(x=gdf["prediction_class"].astype(int), ax=ax2)
+            st.write("Prediction Distribution")
+            fig2, ax2 = plt.subplots(figsize=(4, 3))
+
+            sns.countplot(
+                x=gdf['prediction_class'].astype(int),
+                ax=ax2,
+                palette=['#00FFFF', '#FF4500'],
+                order=[0, 1]
+            )
+
+            ax2.set_xticklabels(["Undamaged", "Damaged"])
+            ax2.set_xlabel("Status")
+            ax2.set_ylabel("Count")
             st.pyplot(fig2)
 
     # -----------------------------
