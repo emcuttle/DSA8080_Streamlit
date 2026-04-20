@@ -36,7 +36,7 @@ sensitivity = st.sidebar.select_slider(
 
 with st.sidebar.expander("What are cluster hotspots?"):
     st.write(
-        "Hotspots are statistically significant clusters of predicted damage."
+        "Hotspots are statistically significant clusters of predicted damage. This helps identify neighborhoods with concentrated predicted damage."
     )
 
 
