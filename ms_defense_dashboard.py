@@ -36,7 +36,7 @@ sensitivity = st.sidebar.select_slider(
 
 with st.sidebar.expander("What are cluster hotspots?"):
     st.write(
-        "Hotspots are statistically significant clusters of predicted damage using Getis-Ord Gi*."
+        "Hotspots are statistically significant clusters of predicted damage."
     )
 
 
@@ -62,17 +62,15 @@ def get_bq_data():
 
 
 # -----------------------------
-# GI* HOTSPOT FUNCTION (SIMPLIFIED + STABLE)
+# GI* HOTSPOT FUNCTION
 # -----------------------------
 @st.cache_data(show_spinner="Computing hotspots…", ttl=0)
 def add_gistar_hotspots(_gdf, sensitivity):
 
     gdf = _gdf.copy()
 
-    # FIXED alpha (prevents instability)
     alpha = 0.05
 
-    # ONLY sensitivity driver = k
     k_map = {
         "Low": 8,
         "Medium": 12,
@@ -150,7 +148,7 @@ try:
             st.pyplot(fig2)
 
     # -----------------------------
-    # LEGEND (UNCHANGED — EXACT VERSION YOU WANTED)
+    # LEGEND
     # -----------------------------
     if enable_hotspots:
         st.markdown(
@@ -205,7 +203,11 @@ try:
             )
         )
 
-        tooltip = "<b>ID:</b> {id}<br><b>Z:</b> {gi_z}"
+        tooltip = (
+            "<b>ID:</b> {id}<br>"
+            "<b>Actual Label:</b> {label}<br>"
+            "<b>Z:</b> {gi_z}"
+        )
 
     else:
         layers.append(
@@ -217,7 +219,11 @@ try:
             )
         )
 
-        tooltip = "<b>ID:</b> {id}<br><b>Prediction:</b> {prediction_class}"
+        tooltip = (
+            "<b>ID:</b> {id}<br>"
+            "<b>Actual Label:</b> {label}<br>"
+            "<b>Prediction:</b> {prediction_class}"
+        )
 
     # -----------------------------
     # VIEW
